@@ -1,2 +1,0 @@
-benchmark,k_ms_per_pair,formula,r2,n_samples
-mpc-decrypt,8.031314,t_total_ms ≈ 8.0313·set_size·(set_size - 1)/2,0.999878,80

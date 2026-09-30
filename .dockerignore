@@ -1,0 +1,13 @@
+# Docker context = the repository root. Only the workspace, the vendored
+# Longfellow sources and the fetched downloads go into images.
+target/
+results/
+tools/
+.work/*
+!.work/downloads/
+third_party/longfellow-zk/docs/
+.git
+.idea/
+INFO.md
+report.pdf
+**/.DS_Store

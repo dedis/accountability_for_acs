@@ -1,2 +1,0 @@
-benchmark,t1_ms_per_input_cft,t2_ms_per_after_filter_cft,formula,n_samples
-link-decrypt,22.951570,20.649436,t_total_ms ≈ 22.9516·set_size + 20.6494·set_size_after_filter,180
