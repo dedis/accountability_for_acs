@@ -1,5 +1,0 @@
-target/
-
-# Raw MP-SPDZ sweep outputs (results.csv / run.log / run.stdout).
-mpc/sweep_*/
-mpc/results.csv

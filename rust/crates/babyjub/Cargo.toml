@@ -1,0 +1,15 @@
+[package]
+name = "babyjub"
+version = "0.1.0"
+description = "Baby Jubjub, Poseidon and EdDSA-Poseidon in the circomlib parameterisation"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ark-ec.workspace = true
+ark-ed-on-bn254.workspace = true
+ark-ff.workspace = true
+light-poseidon.workspace = true
+rand.workspace = true

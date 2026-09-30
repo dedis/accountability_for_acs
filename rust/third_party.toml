@@ -1,0 +1,19 @@
+# Every file tools/fetch.py downloads into .work/downloads/, pinned by SHA-256.
+# Longfellow is vendored in third_party/longfellow-zk; MP-SPDZ is an install,
+# not a download (see crates/revocation/README.md).
+
+[ptau]
+# Perpetual Powers of Tau, power 19, phase-2 prepared. Replaces the Hermez
+# powersOfTau28_hez_final_19.ptau, whose mirrors return 403. The circuits and
+# timings do not depend on which ceremony file is used.
+url = "https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_19.ptau"
+file = "ppot_0080_19.ptau"
+sha256 = "d0cadfb7d5bad6c5e0b012fb1c4bbaa3cc98fe249988f9f99d1818175e4c2015"
+
+[circomlib]
+# Circuit sources circom includes as "circomlib/circuits/...". The npm
+# tarball is immutable; its SHA-1 matches the registry's published shasum.
+url = "https://registry.npmjs.org/circomlib/-/circomlib-2.0.5.tgz"
+file = "circomlib-2.0.5.tgz"
+sha256 = "9f80fa85d9c186589998d15e6dcb8ec59a6ed3fe1ec3cb2f753e493d94dd46b6"
+extract = "circomlib"

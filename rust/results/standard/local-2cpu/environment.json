@@ -1,0 +1,38 @@
+{
+  "host": {
+    "platform": "macOS (Darwin 25.5.0), arm64",
+    "cpu": "Apple M3 Max",
+    "logicalCpus": 12,
+    "memBytes": 38654705664
+  },
+  "docker": {
+    "cpus": 12,
+    "memBytes": 18832310272
+  },
+  "gitCommit": "609af38 (with uncommitted changes)",
+  "started": "2026-09-23T12:15:04+00:00",
+  "finished": null,
+  "limits": {
+    "cpus": "2",
+    "cpusFull": "12",
+    "memory": "16g (standard prove_verify, no_cft, revocation, communication_size ran at 4g)"
+  },
+  "ptau": "powersOfTau28_hez_final_19.ptau (content: PSE ppot_0080_19.ptau)",
+  "notes": "Written by hand for the run before rust/benchmark.py existed. The standard suite ran while the Docker VM had 8 GB; merkle_vs_flat was rerun at 16g after raising it to 18.8 GB. A gcc:13 container not started by the benchmarks ran for a few minutes around 13:25 UTC.",
+  "succeeded": {
+    "standard_local:prove_verify": true,
+    "standard_local:prove_verify_no_cft": true,
+    "standard_local:prove_verify_revocation": true,
+    "standard_local:merkle_vs_flat": true,
+    "standard_local:communication_size": true,
+    "zkfriendly_local:prove_verify": true,
+    "zkfriendly_local:prove_verify_no_cft": true,
+    "zkfriendly_local:prove_verify_revocation": true,
+    "zkfriendly_local:merkle_vs_flat": true,
+    "zkfriendly_local:communication_size": true,
+    "zkfriendly_local_12cpu:prove_verify": true,
+    "zkfriendly_local_12cpu:prove_verify_no_cft": true,
+    "zkfriendly_local_12cpu:prove_verify_revocation": true,
+    "revocation:run_experiments": true
+  }
+}

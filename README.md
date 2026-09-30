@@ -11,7 +11,7 @@ reported in the paper.
   both with a CFT, a no-CFT, and a CFT + non-revocation proof variant).
 - [`revocation/`](revocation/) — **anonymity revocation** benchmarks
   (direct decrypt, link decrypt, and MP-SPDZ-based MPC decrypt).
-- [`rust/`](rust/) — a Rust port of both, mirroring the layout above.
+- [`rust/`](rust/) — both suites as one Rust workspace (`crates/`, `results/`, `tools/`).
 
 See the README inside each folder for build, run, and Docker instructions.
 

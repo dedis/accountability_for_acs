@@ -1,6 +1,0 @@
-target/
-**/artifacts_bench_*/
-**/artifacts_measure_communication_size/
-results/
-.git
-*.md

@@ -1,0 +1,23 @@
+[package]
+name = "zk-friendly"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Circom / Groth16 prove-verify benchmarks for the credential presentation proof"
+
+[dependencies]
+anyhow.workspace = true
+ark-bn254.workspace = true
+ark-ec.workspace = true
+ark-ff.workspace = true
+ark-std.workspace = true
+babyjub.workspace = true
+bench-core.workspace = true
+clap.workspace = true
+rand.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
