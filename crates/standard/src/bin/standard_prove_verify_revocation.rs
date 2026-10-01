@@ -16,7 +16,7 @@ use standard::cli::Common;
 use standard::paths;
 use standard::runner::{self, Gbench};
 
-const TEST_NAME: &str = "prove_verify_revocation_test";
+const TEST_NAME: &str = "circuits/tests/ec/prove_verify_revocation_test";
 const BITS_PER_LEAF: u32 = 253;
 
 #[derive(Parser)]

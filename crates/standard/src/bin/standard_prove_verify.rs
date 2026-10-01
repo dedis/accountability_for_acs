@@ -10,7 +10,7 @@ const BENCH: Bench = Bench {
     backend: "Longfellow - prove_verify_test (32 attrs, flat SHA, 5 used; C4 = ECDSA)",
     variant: "prove_verify",
     default_filter: "BM_CredentialCommitmentProveVerifyCombined_P256",
-    test_name: "prove_verify_test",
+    test_name: "circuits/tests/ec/prove_verify_test",
     bin_env: &["LONGFELLOW_CRED_BENCH_BIN"],
 };
 

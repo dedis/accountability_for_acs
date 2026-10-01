@@ -11,8 +11,17 @@ cmake -S third_party/longfellow-zk/lib -B .work/standard/longfellow-build \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build .work/standard/longfellow-build -j 8 --target \
   prove_verify_test prove_verify_no_cft_test \
-  attr_commitment_experiment_test prove_verify_revocation_test
+  attr_commitment_experiment_test prove_verify_revocation_test \
+  ml_dsa_65_zk_test
 cargo build --release -p standard
+```
+
+The `pq` feature (on by default) adds `standard_ml_dsa65` and needs the
+`ml_dsa_65_zk_test` target. Without it, skip that target and build with
+`--no-default-features`:
+
+```bash
+cargo build --release -p standard --no-default-features
 ```
 
 On macOS: `brew install googletest google-benchmark zstd`. On Debian/Ubuntu:
@@ -26,6 +35,7 @@ cargo run --release --bin standard_prove_verify_no_cft
 cargo run --release --bin standard_prove_verify_revocation
 cargo run --release --bin standard_merkle_vs_flat
 cargo run --release --bin standard_communication_size
+cargo run --release --bin standard_ml_dsa65            # pq feature
 ```
 
 Each writes `summary.json` to `--out DIR` (default
@@ -55,7 +65,7 @@ does nothing; quiet output is the default.
 | Path | Role |
 |------|------|
 | `src/` | Google Benchmark runner and report parsing, the shared presentation driver |
-| `src/bin/` | The five benchmarks |
+| `src/bin/` | The six benchmarks (`standard_ml_dsa65` needs the `pq` feature) |
 | `measure/` | Proof-size programs (C++) and their build scripts, run by `standard_communication_size` |
 
 The merkle-vs-flat sweep needs more than 7 GB of memory at \(n = 64\).

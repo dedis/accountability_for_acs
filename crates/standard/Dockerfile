@@ -30,7 +30,8 @@ RUN cmake -S third_party/longfellow-zk/lib -B .work/standard/longfellow-build \
       -DCMAKE_BUILD_TYPE=Release \
  && cmake --build .work/standard/longfellow-build -j"$(nproc)" \
       --target prove_verify_test prove_verify_no_cft_test \
-               attr_commitment_experiment_test prove_verify_revocation_test
+               attr_commitment_experiment_test prove_verify_revocation_test \
+               ml_dsa_65_zk_test
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/

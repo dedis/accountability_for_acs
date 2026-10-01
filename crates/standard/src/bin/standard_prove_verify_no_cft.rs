@@ -10,7 +10,7 @@ const BENCH: Bench = Bench {
     backend: "Longfellow - prove_verify_no_cft_test (32 attrs, flat SHA, 5 used; no CFT)",
     variant: "prove_verify_no_cft",
     default_filter: "BM_CredentialCommitmentProveVerifyNoCftCombined_P256",
-    test_name: "prove_verify_no_cft_test",
+    test_name: "circuits/tests/ec/prove_verify_no_cft_test",
     bin_env: &["LONGFELLOW_NO_CFT_BENCH_BIN", "LONGFELLOW_CRED_BENCH_BIN"],
 };
 

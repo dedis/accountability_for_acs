@@ -7,6 +7,14 @@ license.workspace = true
 publish.workspace = true
 description = "Longfellow (Google Benchmark) prove-verify benchmarks for the credential presentation proof"
 
+[features]
+default = ["pq"]
+pq = []
+
+[[bin]]
+name = "standard_ml_dsa65"
+required-features = ["pq"]
+
 [dependencies]
 anyhow.workspace = true
 bench-core.workspace = true

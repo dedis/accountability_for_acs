@@ -2,8 +2,8 @@
 """Runs every benchmark, collects the results and draws the plots.
 
   1. Fetches the pinned downloads (tools/fetch.py) and builds the Docker images.
-  2. Runs the five standard (Longfellow) and five zk-friendly benchmarks in
-     Docker with --cpus/--memory; results go to results/<stack>/local-<N>cpu/.
+  2. Runs the standard (Longfellow, including ML-DSA-65) and zk-friendly
+     benchmarks in Docker with --cpus/--memory; results go to results/<stack>/local-<N>cpu/.
   3. Reruns the three zk-friendly prove benchmarks with --cpus-full, to show
      how rapidsnark scales with cores (results/zk-friendly/local-<M>cpu/).
   4. Runs the revocation CFT experiments natively (results/revocation/local/),
@@ -52,6 +52,7 @@ PASS_ENV = (
 BENCHES = ("prove_verify", "prove_verify_no_cft", "prove_verify_revocation",
            "merkle_vs_flat", "communication_size")
 PROVE_BENCHES = BENCHES[:3]
+STANDARD_BENCHES = BENCHES + ("ml_dsa65",)
 
 
 def run(cmd: list[str], **kwargs) -> int:
@@ -198,7 +199,8 @@ def main() -> None:
     runs: list[tuple[Path, dict[str, bool]]] = []
     for stack in docker_stacks:
         dest = results / stack / f"local-{args.cpus}cpu"
-        runs.append((dest, docker_suite(stack, BENCHES, limits, dest)))
+        benches = STANDARD_BENCHES if stack == "standard" else BENCHES
+        runs.append((dest, docker_suite(stack, benches, limits, dest)))
     if "zk-friendly" in stacks and args.cpus_full != "0":
         dest = results / "zk-friendly" / f"local-{args.cpus_full}cpu"
         full = ["--cpus", args.cpus_full, *limits[2:]]

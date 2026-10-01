@@ -22,7 +22,7 @@ use standard::gbench::{self, Row};
 use standard::paths;
 use standard::runner::{self, Gbench};
 
-const TEST_NAME: &str = "attr_commitment_experiment_test";
+const TEST_NAME: &str = "circuits/tests/ec/attr_commitment_experiment_test";
 
 #[derive(Parser)]
 #[command(about = "Longfellow Merkle versus flat attribute commitment sweep")]

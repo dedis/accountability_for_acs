@@ -1,0 +1,3 @@
+[alias]
+# Classical build: every benchmark except the post-quantum ones (`pq` feature).
+build-classical = "build --release --no-default-features"

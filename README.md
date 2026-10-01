@@ -41,6 +41,10 @@ python3 tools/fetch.py                           # ptau + circomlib into .work/d
 python3 tools/benchmark.py                       # every benchmark in Docker, then the plots
 ```
 
+The default build includes the post-quantum benchmarks (`pq` feature of
+`standard`: ML-DSA-65). `cargo build-classical` builds the classical
+benchmarks only.
+
 `tools/benchmark.py --help` lists its options (`--only`, `--cpus`,
 `--cpus-full`, `--memory`, `--skip-build`). Each crate's README covers running
 its benchmarks directly.

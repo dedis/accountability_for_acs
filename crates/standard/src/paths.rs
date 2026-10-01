@@ -22,13 +22,10 @@ pub fn build_dir() -> PathBuf {
         )
 }
 
-/// Where the CMake release build puts a benchmark binary.
+/// Where the CMake release build puts a benchmark binary, given its path
+/// relative to the build tree.
 pub fn default_bin_path(test_name: &str) -> PathBuf {
-    build_dir()
-        .join("circuits")
-        .join("tests")
-        .join("ec")
-        .join(test_name)
+    build_dir().join(test_name)
 }
 
 /// The proof-size measurement programs and their build scripts.

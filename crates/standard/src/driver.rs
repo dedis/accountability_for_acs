@@ -1,8 +1,9 @@
-//! The shared driver for the two presentation benchmarks.
+//! The shared driver for the benchmarks that report one Combined
+//! prove/verify pass per repetition.
 //!
-//! `standard_prove_verify` and `standard_prove_verify_no_cft` differ only in
-//! which binary they run, which filter they default to and how they label
-//! themselves.
+//! `standard_prove_verify`, `standard_prove_verify_no_cft` and
+//! `standard_ml_dsa65` differ only in which binary they run, which filter they
+//! default to and how they label themselves.
 
 use bench_core::stats::{self, P95};
 use std::collections::BTreeMap;
@@ -16,14 +17,14 @@ use crate::runner::{self, Gbench};
 use bench_core::report;
 use bench_core::time;
 
-/// What distinguishes one presentation benchmark from the other.
+/// What distinguishes one Combined benchmark from another.
 pub struct Bench {
     /// One line describing the circuit under test.
     pub backend: &'static str,
     /// `variant` field of the summary metadata, and the output folder name.
     pub variant: &'static str,
     pub default_filter: &'static str,
-    /// Binary name under the Longfellow build tree.
+    /// Binary path relative to the Longfellow build tree.
     pub test_name: &'static str,
     /// Environment variables that may point at the binary, most specific first.
     pub bin_env: &'static [&'static str],
