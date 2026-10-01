@@ -43,8 +43,7 @@ python3 tools/benchmark.py                       # every benchmark in Docker, th
 
 `tools/benchmark.py --help` lists its options (`--only`, `--cpus`,
 `--cpus-full`, `--memory`, `--skip-build`). Each crate's README covers running
-its benchmarks directly; `crates/revocation/MPC_BENCH.md` covers the MP-SPDZ
-sweep on the SPHERE testbed.
+its benchmarks directly.
 
 ## Conventions
 

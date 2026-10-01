@@ -73,7 +73,7 @@ pub fn run(spdz_path: &Path, full_name: &str, parties: usize) -> Result<PartyOut
 
     let mut children = Vec::with_capacity(parties);
     for party in 0..parties {
-        let child = Command::new("./shamir-party.x")
+        let child = Command::new("./shamir-party.x") // Switch to sy-shamir-party.x ? PQ in name + semi-honest, honest majority -> malicious, honest majority
             .args([
                 "-v",
                 "-N",

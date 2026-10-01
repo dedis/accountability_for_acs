@@ -83,3 +83,7 @@ add_subdirectory(circuits/sha)
 # EC benchmarks (flat vs Merkle attr commitment, credential commitment) + EC tests
 add_subdirectory(circuits/tests/ec)
 
+# SHAKE256 circuit, from upstream google/longfellow-zk d5e6be773369
+# (lib/circuits/tests/sha3)
+add_subdirectory(circuits/tests/sha3)
+

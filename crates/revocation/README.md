@@ -63,8 +63,6 @@ python3 crates/revocation/mpc/summarize.py .work/revocation/mpc-sweep_*/results.
 `summarize.py` writes `mpc-decrypt_{runs,summary,fit}.csv` to its second
 argument (default `.work/revocation/out/mpc/`).
 
-To run the sweep on the SPHERE testbed, see [`MPC_BENCH.md`](MPC_BENCH.md).
-
 | Path | Role |
 |------|------|
 | `src/` | CFTs, C4 binding, the experiment grid, MP-SPDZ driver, statistics, CSV |
