@@ -87,3 +87,7 @@ add_subdirectory(circuits/tests/ec)
 # (lib/circuits/tests/sha3)
 add_subdirectory(circuits/tests/sha3)
 
+# ML-DSA verification circuit, from upstream google/longfellow-zk d5e6be773369
+# (lib/circuits/tests/pq/ml_dsa)
+add_subdirectory(circuits/tests/pq/ml_dsa)
+
