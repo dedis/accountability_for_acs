@@ -49,13 +49,13 @@ size_t packed_depth(size_t revoc_log2) {
 int main() {
   proofs::set_log_level(proofs::WARNING);
   const auto scales = parse_scales();
-  const size_t pub_bytes = proofs::kProveVerifyRevocPublicSize * 32;
+  const size_t pub_bytes = 17 * 32 + proofs::kProveVerifyRevocNodeBytes;
   constexpr size_t kCftBytes = 9 * 32;
 
   std::printf("stack: longfellow-zk\n");
   std::printf("circuit: prove_verify + CFT + packed status-list\n");
-  std::printf("public_inputs_bytes (fixed): %zu  (17*32 + 32 root)\n",
-              pub_bytes);
+  std::printf("public_inputs_bytes (fixed): %zu  (17*32 + %zu root)\n",
+              pub_bytes, proofs::kProveVerifyRevocNodeBytes);
   std::printf("cft_bytes: %zu\n", kCftBytes);
   std::printf("\n");
 

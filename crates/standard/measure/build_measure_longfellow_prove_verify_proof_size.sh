@@ -21,7 +21,7 @@ OUT_BIN="${BLD}/measure_longfellow_prove_verify_proof_size"
 TEST_DIR="${BLD}/circuits/tests/ec/CMakeFiles/prove_verify${TARGET_SUFFIX}_test.dir"
 
 echo "Compiling ${OUT_BIN} ..."
-"${CXX_BIN}" -std=gnu++20 -O3 -DNDEBUG \
+"${CXX_BIN}" -std=gnu++20 -O3 -DNDEBUG ${HASH_DEFS[@]+"${HASH_DEFS[@]}"} \
   -I"${LIB}" -I"${BLD}" ${OPENSSL_INC} \
   -c "${MEASURE_CC}" -o /tmp/measure_prove_verify_main.o
 

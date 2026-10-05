@@ -24,6 +24,7 @@
 #include "algebra/poly.h"
 #include "arrays/affine.h"
 #include "sumcheck/quad.h"
+#include "util/crypto.h"
 
 namespace proofs {
 template <class Field>
@@ -50,7 +51,7 @@ struct Circuit {
 
   std::vector<Layer<Field>> l;  // layers
 
-  uint8_t id[32];  // unique id for the circuit, created by the compiler
+  uint8_t id[kHashDigestSize];  // unique id for the circuit, created by the compiler
 
   size_t nterms() const {
     size_t n = 0;

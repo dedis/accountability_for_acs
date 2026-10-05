@@ -9,12 +9,12 @@ pub mod gbench;
 pub mod paths;
 pub mod runner;
 
-/// The hash inside the credential circuits: SHA-256, or SHAKE256 (32-byte
-/// output) with the `pq` feature.
+/// The hash in the credential circuits and in Longfellow's proof system:
+/// SHA-256, or SHAKE256 (48-byte output) with the `pq` feature.
 #[cfg(not(feature = "pq"))]
 pub const HASH: &str = "SHA-256";
-/// The hash inside the credential circuits: SHA-256, or SHAKE256 (32-byte
-/// output) with the `pq` feature.
+/// The hash in the credential circuits and in Longfellow's proof system:
+/// SHA-256, or SHAKE256 (48-byte output) with the `pq` feature.
 #[cfg(feature = "pq")]
 pub const HASH: &str = "SHAKE256";
 

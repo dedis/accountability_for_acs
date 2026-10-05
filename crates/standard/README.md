@@ -19,9 +19,13 @@ cargo build --release -p standard
 ```
 
 The `pq` feature (on by default) runs the `*_pq_test` binaries, which use
-SHAKE256 (32-byte output) in place of SHA-256 inside the circuits and for the
+SHAKE256 (48-byte output) in place of SHA-256 inside the circuits and for the
 native witnesses (`third_party/longfellow-zk/lib/circuits/tests/ec/shake256_hash.h`,
-compile definition `PROOFS_EC_SHAKE256`), and adds `standard_ml_dsa65`. Each
+compile definition `PROOFS_EC_SHAKE256`), and adds `standard_ml_dsa65`. These
+binaries and `ml_dsa_65_zk_test` also use SHAKE256 in the proof system: Merkle
+commitments, Fiat-Shamir transcript, circuit ID, and a SHAKE256 PRF in place of
+AES-256 (`third_party/longfellow-zk/lib/util/crypto.h`, compile definition
+`PROOFS_SHAKE256`). Each
 benchmark binary also contains a test that the proof verifies and fails after a
 change to a public input: run it without arguments. Without `pq`, only the
 classical `*_test` targets are needed:

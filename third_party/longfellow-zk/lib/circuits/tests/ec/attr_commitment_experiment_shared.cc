@@ -63,9 +63,13 @@ using v256 = LogicCircuit::v256;
 constexpr size_t kRate = 7;
 constexpr size_t kQueries = 132;
 constexpr size_t kAttrBytes = 32;
-#ifndef PROOFS_EC_SHAKE256
+#ifdef PROOFS_EC_SHAKE256
+constexpr size_t kDigestBytes = kSHAKE256DigestSize;
+#else
 constexpr size_t kShaPluckerBits = 3;
+constexpr size_t kDigestBytes = 32;
 #endif
+using NodeDigest = std::array<uint8_t, kDigestBytes>;
 
 // Root of unity for the f_p256^2 extension field (same as credential benchmark).
 static constexpr char kP256ExtRootX[] =
@@ -76,11 +80,11 @@ static constexpr char kP256ExtRootY[] =
     "12908";
 constexpr uint64_t kP256ExtRootOrder = 1ull << 31;
 
-// SHA-256, or SHAKE256 with a 32-byte output with PROOFS_EC_SHAKE256.
-static void hash_bytes(const uint8_t* msg, size_t len, uint8_t out[32]) {
+// SHA-256, or SHAKE256 with a 48-byte output with PROOFS_EC_SHAKE256.
+static void hash_bytes(const uint8_t* msg, size_t len, uint8_t out[kDigestBytes]) {
 #ifdef PROOFS_EC_SHAKE256
   const auto digest = shake256(msg, len);
-  std::memcpy(out, digest.data(), 32);
+  std::memcpy(out, digest.data(), kDigestBytes);
 #else
   SHA256_CTX ctx;
   SHA256_Init(&ctx);
@@ -124,7 +128,7 @@ template <size_t NAttrs>
 struct FlatCtx {
   static constexpr size_t kMsgBytes = NAttrs * kAttrBytes;
   std::array<std::array<uint8_t, 32>, NAttrs> attrs{};
-  std::array<uint8_t, 32> digest{};
+  NodeDigest digest{};
   std::array<uint8_t, kMsgBytes> msg{};
   Shake256Native hash;
 };
@@ -136,7 +140,7 @@ std::unique_ptr<Circuit<Field>> make_flat_circuit() {
   const LogicCircuit lc(&cbk, p256_base);
   Shake256Hash<LogicCircuit> shake(lc);
 
-  std::array<v8, 32> digest_pub{};
+  std::array<v8, kDigestBytes> digest_pub{};
   for (auto& b : digest_pub) b = lc.template vinput<8>();
 
   Q.private_input();
@@ -147,7 +151,7 @@ std::unique_ptr<Circuit<Field>> make_flat_circuit() {
   hw.input(lc, msg.size());
 
   const auto digest = shake.digest(msg.data(), msg.size(), hw);
-  for (size_t i = 0; i < 32; ++i) lc.vassert_eq(digest[i], digest_pub[i]);
+  for (size_t i = 0; i < kDigestBytes; ++i) lc.vassert_eq(digest[i], digest_pub[i]);
 
   return Q.mkcircuit(1);
 }
@@ -240,17 +244,17 @@ static void fill_flat(Dense<Field>& W, const FlatCtx<NAttrs>& ctx, bool prover) 
 // Merkle circuit:
 //   leaf = SHA256(be32(index) || value_bytes)
 //   internal = SHA256(left_digest || right_digest)
-//   public: root bytes (32)
+//   public: root bytes (32, or 48 with PROOFS_EC_SHAKE256)
 //   witness: for each of K claims: value bytes + path siblings + path bits + SHA witnesses
 // =============================================================================
 
 #ifdef PROOFS_EC_SHAKE256
-// SHAKE256 variant: leaf = SHAKE256(be32(index) || value_bytes),
+// SHAKE256 variant (48-byte digests): leaf = SHAKE256(be32(index) || value_bytes),
 // internal = SHAKE256(left_digest || right_digest).
 template <size_t Depth>
 struct ClaimCtx {
   std::array<uint8_t, 32> value_be{};
-  std::array<std::array<uint8_t, 32>, Depth> path_elements{};
+  std::array<NodeDigest, Depth> path_elements{};
   std::array<Field::Elt, Depth> path_indices{};  // 0/1 in field
   Shake256Native leaf_hash;
   std::array<Shake256Native, Depth> node_hash{};
@@ -261,7 +265,7 @@ constexpr size_t kShaBlocks64 = 2;  // SHA256 over 64 bytes => 2 blocks with pad
 template <size_t Depth>
 struct ClaimCtx {
   std::array<uint8_t, 32> value_be{};
-  std::array<std::array<uint8_t, 32>, Depth> path_elements{};
+  std::array<NodeDigest, Depth> path_elements{};
   std::array<Field::Elt, Depth> path_indices{};  // 0/1 in field
   std::array<FlatSHA256Witness::BlockWitness, 2> leaf_bw{};
   std::array<std::array<FlatSHA256Witness::BlockWitness, 2>, Depth> node_bw{};
@@ -272,7 +276,7 @@ template <size_t NAttrs, size_t Depth, size_t K>
 struct MerkleCtx {
   static_assert((1u << Depth) == NAttrs);
   std::array<std::array<uint8_t, 32>, NAttrs> attrs{};
-  std::array<uint8_t, 32> root{};
+  NodeDigest root{};
   std::array<ClaimCtx<Depth>, K> claims{};
 };
 
@@ -285,18 +289,26 @@ std::unique_ptr<Circuit<Field>> make_merkle_circuit() {
   const LogicCircuit lc(&cbk, p256_base);
   Hash shake(lc);
 
-  std::array<v8, 32> root_pub{};
+  std::array<v8, kDigestBytes> root_pub{};
   for (auto& b : root_pub) b = lc.template vinput<8>();
 
   Q.private_input();
 
-  auto hash2_64bytes = [&](const std::array<v8, 32>& left,
-                           const std::array<v8, 32>& right,
-                           const typename Hash::Witness& hw) {
-    v8 in[64];
-    for (size_t i = 0; i < 32; ++i) in[i] = left[i];
-    for (size_t i = 0; i < 32; ++i) in[32 + i] = right[i];
-    return shake.digest(in, 64, hw);
+  auto leaf_hash = [&](const std::array<v8, kAttrBytes>& name,
+                       const std::array<v8, kAttrBytes>& value,
+                       const typename Hash::Witness& hw) {
+    v8 in[2 * kAttrBytes];
+    for (size_t i = 0; i < kAttrBytes; ++i) in[i] = name[i];
+    for (size_t i = 0; i < kAttrBytes; ++i) in[kAttrBytes + i] = value[i];
+    return shake.digest(in, 2 * kAttrBytes, hw);
+  };
+  auto node_hash = [&](const std::array<v8, kDigestBytes>& left,
+                       const std::array<v8, kDigestBytes>& right,
+                       const typename Hash::Witness& hw) {
+    v8 in[2 * kDigestBytes];
+    for (size_t i = 0; i < kDigestBytes; ++i) in[i] = left[i];
+    for (size_t i = 0; i < kDigestBytes; ++i) in[kDigestBytes + i] = right[i];
+    return shake.digest(in, 2 * kDigestBytes, hw);
   };
 
   auto be32_of_u8 = [&](uint8_t x) {
@@ -309,31 +321,31 @@ std::unique_ptr<Circuit<Field>> make_merkle_circuit() {
   for (size_t claim_i = 0; claim_i < K; ++claim_i) {
     std::array<v8, 32> val{};
     for (auto& b : val) b = lc.template vinput<8>();
-    std::array<std::array<v8, 32>, Depth> sib{};
+    std::array<std::array<v8, kDigestBytes>, Depth> sib{};
     std::array<EltW, Depth> path_idx{};
     for (size_t d = 0; d < Depth; ++d) {
       for (auto& b : sib[d]) b = lc.template vinput<8>();
       path_idx[d] = lc.eltw_input();
     }
     typename Hash::Witness leaf_hw;
-    leaf_hw.input(lc, 64);
+    leaf_hw.input(lc, 2 * kAttrBytes);
     std::array<typename Hash::Witness, Depth> node_hw;
-    for (auto& hw : node_hw) hw.input(lc, 64);
+    for (auto& hw : node_hw) hw.input(lc, 2 * kDigestBytes);
 
-    std::array<v8, 32> cur =
-        hash2_64bytes(be32_of_u8(static_cast<uint8_t>(claim_i)), val, leaf_hw);
+    std::array<v8, kDigestBytes> cur =
+        leaf_hash(be32_of_u8(static_cast<uint8_t>(claim_i)), val, leaf_hw);
     for (size_t d = 0; d < Depth; ++d) {
       typename LogicCircuit::BitW bi(path_idx[d], lc.f_);
       lc.assert_is_bit(bi);
-      std::array<v8, 32> left{}, right{};
-      for (size_t i = 0; i < 32; ++i) {
+      std::array<v8, kDigestBytes> left{}, right{};
+      for (size_t i = 0; i < kDigestBytes; ++i) {
         lc.vmux(bi, left[i], sib[d][i], cur[i]);
         lc.vmux(bi, right[i], cur[i], sib[d][i]);
       }
-      cur = hash2_64bytes(left, right, node_hw[d]);
+      cur = node_hash(left, right, node_hw[d]);
     }
 
-    for (size_t i = 0; i < 32; ++i) lc.vassert_eq(cur[i], root_pub[i]);
+    for (size_t i = 0; i < kDigestBytes; ++i) lc.vassert_eq(cur[i], root_pub[i]);
   }
 
   return Q.mkcircuit(1);
@@ -344,13 +356,13 @@ static void fill_merkle(Dense<Field>& W, const MerkleCtx<NAttrs, Depth, K>& ctx,
                         bool prover) {
   DenseFiller<Field> f(W);
   f.push_back(p256_base.one());
-  for (size_t i = 0; i < 32; ++i) f.push_back(ctx.root[i], 8, p256_base);
+  for (size_t i = 0; i < kDigestBytes; ++i) f.push_back(ctx.root[i], 8, p256_base);
   if (!prover) return;
   for (size_t i = 0; i < K; ++i) {
     const auto& c = ctx.claims[i];
     for (size_t j = 0; j < 32; ++j) f.push_back(c.value_be[j], 8, p256_base);
     for (size_t d = 0; d < Depth; ++d) {
-      for (size_t j = 0; j < 32; ++j) f.push_back(c.path_elements[d][j], 8, p256_base);
+      for (size_t j = 0; j < kDigestBytes; ++j) f.push_back(c.path_elements[d][j], 8, p256_base);
       f.push_back(c.path_indices[d]);
     }
     c.leaf_hash.push(f, p256_base);
@@ -471,13 +483,13 @@ static void fill_merkle(Dense<Field>& W, const MerkleCtx<NAttrs, Depth, K>& ctx,
                         bool prover) {
   DenseFiller<Field> f(W);
   f.push_back(p256_base.one());
-  for (size_t i = 0; i < 32; ++i) f.push_back(ctx.root[i], 8, p256_base);
+  for (size_t i = 0; i < kDigestBytes; ++i) f.push_back(ctx.root[i], 8, p256_base);
   if (!prover) return;
   for (size_t i = 0; i < K; ++i) {
     const auto& c = ctx.claims[i];
     for (size_t j = 0; j < 32; ++j) f.push_back(c.value_be[j], 8, p256_base);
     for (size_t d = 0; d < Depth; ++d) {
-      for (size_t j = 0; j < 32; ++j) f.push_back(c.path_elements[d][j], 8, p256_base);
+      for (size_t j = 0; j < kDigestBytes; ++j) f.push_back(c.path_elements[d][j], 8, p256_base);
       f.push_back(c.path_indices[d]);
     }
     push_sha64_bw(f, c.leaf_bw);
@@ -651,7 +663,7 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
     SecureRandomEngine rng_local;
     for (auto& a : zk_.ctx.attrs) random_bytes(rng_local, a);
 
-    std::array<std::array<uint8_t, 32>, NAttrs> level{};
+    std::array<NodeDigest, NAttrs> level{};
     for (size_t i = 0; i < NAttrs; ++i) {
       uint8_t msg64[64];
       be32_of_u8(msg64, static_cast<uint8_t>(i));
@@ -659,15 +671,15 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
       hash_bytes(msg64, 64, level[i].data());
     }
 
-    std::array<std::array<std::array<uint8_t, 32>, NAttrs>, Depth + 1> tree{};
+    std::array<std::array<NodeDigest, NAttrs>, Depth + 1> tree{};
     tree[0] = level;
     size_t width = NAttrs;
     for (size_t d = 0; d < Depth; ++d) {
       for (size_t j = 0; j < width; j += 2) {
-        uint8_t msg64[64];
-        std::memcpy(msg64, tree[d][j].data(), 32);
-        std::memcpy(msg64 + 32, tree[d][j + 1].data(), 32);
-        hash_bytes(msg64, 64, tree[d + 1][j / 2].data());
+        uint8_t msg[2 * kDigestBytes];
+        std::memcpy(msg, tree[d][j].data(), kDigestBytes);
+        std::memcpy(msg + kDigestBytes, tree[d][j + 1].data(), kDigestBytes);
+        hash_bytes(msg, sizeof(msg), tree[d + 1][j / 2].data());
       }
       width >>= 1;
     }
@@ -701,16 +713,16 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
 
         const auto& left = is_right ? tree[d][sibling] : tree[d][idx];
         const auto& right = is_right ? tree[d][idx] : tree[d][sibling];
-        uint8_t msg64[64];
-        std::memcpy(msg64, left.data(), 32);
-        std::memcpy(msg64 + 32, right.data(), 32);
+        uint8_t msg[2 * kDigestBytes];
+        std::memcpy(msg, left.data(), kDigestBytes);
+        std::memcpy(msg + kDigestBytes, right.data(), kDigestBytes);
 #ifdef PROOFS_EC_SHAKE256
-        c.node_hash[d].compute(msg64, 64);
+        c.node_hash[d].compute(msg, sizeof(msg));
 #else
-        sha256_witness_64(msg64, c.node_bw[d]);
+        sha256_witness_64(msg, c.node_bw[d]);
         {
           std::array<uint8_t, 32> want{};
-          hash_bytes(msg64, 64, want.data());
+          hash_bytes(msg, sizeof(msg), want.data());
           const auto got = digest_bytes_from_bw(c.node_bw[d]);
           check(got == want, "node bw digest bytes mismatch");
         }

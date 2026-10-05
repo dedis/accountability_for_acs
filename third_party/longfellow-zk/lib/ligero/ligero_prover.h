@@ -68,7 +68,7 @@ class LigeroProver {
     layout(W, subfield_boundary, lqc, interpolator, rng, F);
 
     // Merkle commitment
-    auto updhash = [&](size_t j, SHA256 &sha) {
+    auto updhash = [&](size_t j, Hash &sha) {
       LigeroCommon<Field>::column_hash(p_.nrow, &tableau_at(0, j + p_.dblock),
                                        p_.block_enc, sha, F);
     };

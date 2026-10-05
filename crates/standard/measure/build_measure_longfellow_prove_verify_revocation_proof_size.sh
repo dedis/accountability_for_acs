@@ -22,7 +22,7 @@ cmake --build "${BLD}" -j --target prove_verify_revocation${TARGET_SUFFIX}_test
 
 TEST_DIR="${BLD}/circuits/tests/ec/CMakeFiles/prove_verify_revocation${TARGET_SUFFIX}_test.dir"
 echo "Compiling ${OUT_BIN} ..."
-"${CXX_BIN}" -std=gnu++20 -O3 -DNDEBUG \
+"${CXX_BIN}" -std=gnu++20 -O3 -DNDEBUG ${HASH_DEFS[@]+"${HASH_DEFS[@]}"} \
   -I"${LIB}" -I"${BLD}" ${OPENSSL_INC} \
   -c "${MEASURE_CC}" -o /tmp/measure_pvr_main.o
 

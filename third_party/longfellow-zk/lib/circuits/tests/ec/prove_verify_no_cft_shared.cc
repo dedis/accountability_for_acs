@@ -74,6 +74,14 @@ const char kP256ExtRootY[] =
     "840879943585409076957404614278186605601821689971823787493130182544504602"
     "12908";
 
+// The credential hash input: the 32 leaf digests.
+#ifdef PROOFS_EC_SHAKE256
+constexpr size_t kLeafDigestBytes = kSHAKE256DigestSize;
+#else
+constexpr size_t kLeafDigestBytes = 32;
+#endif
+constexpr size_t kLeafMsgBytes = kProveVerifyNoCftCredentialAttrs * kLeafDigestBytes;
+
 const P256Traits::EC& P256Traits::ec() { return p256; }
 const P256Traits::Field& P256Traits::field() { return p256_base; }
 const P256Traits::Scalar& P256Traits::scalar_field() { return p256_scalar; }
@@ -183,11 +191,11 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
 #ifdef PROOFS_EC_SHAKE256
   // SHAKE256 over the 32 leaf digests.
   struct CredentialShaWitness {
-    v8 msg[kProveVerifyNoCftCredentialMsgBytes];
+    v8 msg[kLeafMsgBytes];
     typename Hash::Witness hash;
     void input(const LogicCircuit& lc) {
       for (auto& b : msg) b = lc.template vinput<8>();
-      hash.input(lc, kProveVerifyNoCftCredentialMsgBytes);
+      hash.input(lc, kLeafMsgBytes);
     }
   };
 #else
@@ -299,7 +307,7 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
 #ifdef PROOFS_EC_SHAKE256
     // SHAKE256 over 32 Merkle-style leaf digests (each SHAKE256(be32(i)||attr_i)).
     EltW digest_field = repack_be32_from_bytes(
-        shake.digest(w.credential_sha.msg, kProveVerifyNoCftCredentialMsgBytes,
+        shake.digest(w.credential_sha.msg, kLeafMsgBytes,
                      w.credential_sha.hash).data());
 #else
     // Flat SHA-256 over 32 Merkle-style leaf digests (each SHA256(be32(i)||attr_i)).
@@ -400,7 +408,7 @@ struct BenchmarkContext {
 
   std::array<std::array<uint8_t, 32>, kProveVerifyNoCftCredentialAttrs> attr_values{};
 #ifdef PROOFS_EC_SHAKE256
-  std::array<uint8_t, kProveVerifyNoCftCredentialMsgBytes> credential_msg{};
+  std::array<uint8_t, kLeafMsgBytes> credential_msg{};
   Shake256Native credential_hash;
 #else
   std::array<uint8_t, 32> credential_digest_be{};
@@ -517,7 +525,7 @@ struct BenchmarkContext {
       std::memset(out, 0, 32);
       out[31] = idx;
     };
-    std::array<uint8_t, kProveVerifyNoCftCredentialMsgBytes> leaf_msg{};
+    std::array<uint8_t, kLeafMsgBytes> leaf_msg{};
     for (size_t i = 0; i < kProveVerifyNoCftCredentialAttrs; ++i) {
       uint8_t name_be[32];
       be32_index(name_be, static_cast<uint8_t>(i));
@@ -526,9 +534,9 @@ struct BenchmarkContext {
       std::memcpy(msg64 + 32, attr_values[i].data(), 32);
 #ifdef PROOFS_EC_SHAKE256
       const auto leaf = shake256(msg64, 64);
-      std::memcpy(&leaf_msg[i * 32], leaf.data(), 32);
+      std::memcpy(&leaf_msg[i * kLeafDigestBytes], leaf.data(), kLeafDigestBytes);
 #else
-      sha256_64_digest(msg64, &leaf_msg[i * 32]);
+      sha256_64_digest(msg64, &leaf_msg[i * kLeafDigestBytes]);
 #endif
     }
 

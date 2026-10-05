@@ -12,7 +12,7 @@ pub fn to_fq(poseidon: &Poseidon, inputs: &[Fq]) -> Fq {
 }
 
 /// Hashes field elements to a field element with SHAKE256: the input is the
-/// concatenation of their 32-byte big-endian encodings, and the 32-byte output
+/// concatenation of their 32-byte big-endian encodings, and the 48-byte output
 /// is read as a big-endian integer modulo p.
 #[cfg(feature = "pq")]
 pub fn to_fq(_: &Poseidon, inputs: &[Fq]) -> Fq {
@@ -26,7 +26,7 @@ pub fn to_fq(_: &Poseidon, inputs: &[Fq]) -> Fq {
             shake.update(&limb.to_be_bytes());
         }
     }
-    let mut out = [0u8; 32];
+    let mut out = [0u8; 48];
     shake.finalize_xof().read(&mut out);
     Fq::from_be_bytes_mod_order(&out)
 }
@@ -36,13 +36,13 @@ mod tests {
     use super::*;
 
     /// Reference value from Python: `int.from_bytes(hashlib.shake_256(
-    /// b"".join(x.to_bytes(32, "big") for x in [1, 2, 3])).digest(32), "big") % p`.
+    /// b"".join(x.to_bytes(32, "big") for x in [1, 2, 3])).digest(48), "big") % p`.
     #[test]
     fn matches_python_shake256() {
         let inputs = [Fq::from(1u64), Fq::from(2u64), Fq::from(3u64)];
         assert_eq!(
             to_fq(&Poseidon::new(), &inputs).to_string(),
-            "6815949648680181216063604780429555423187430649667665861448413699688549098149"
+            "10810946367658450885207473501118646170053732173155131696511664983288739719709"
         );
     }
 }

@@ -34,7 +34,8 @@ constexpr uint64_t kP256ExtRootOrder = 1ull << 31;
 // 32 attribute slots; flat SHA-256 over Merkle-style leaves SHA256(be32(i)||value_i);
 // 5 slots used in the age-check presentation (0,1,4,5,6).
 // C4 = ECDSA under IDu on SHA256(t || r2·pk_x || r2·pk_y).
-// With PROOFS_EC_SHAKE256, SHAKE256 (32-byte output) replaces SHA-256 throughout.
+// With PROOFS_EC_SHAKE256, SHAKE256 (48-byte output) replaces SHA-256 throughout;
+// ECDSA signs the first 32 bytes of the digest.
 constexpr size_t kProveVerifyCredentialAttrs = 32;
 constexpr size_t kProveVerifyAttrBytes = 32;
 constexpr size_t kProveVerifyCredentialMsgBytes = kProveVerifyCredentialAttrs * kProveVerifyAttrBytes;

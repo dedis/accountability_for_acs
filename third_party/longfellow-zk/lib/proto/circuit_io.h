@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "util/crypto.h"
+
 namespace proofs {
 
 enum FieldID {
@@ -46,7 +48,7 @@ struct CircuitIO {
   // enough to work.
   static constexpr size_t kBytesPerSizeT = 3;
 
-  static constexpr size_t kIdSize = 32;
+  static constexpr size_t kIdSize = kHashDigestSize;
   static constexpr size_t kMaxLayers = 10000;  // deep circuits are errors
   static constexpr uint64_t kMaxValue = (1ULL << (kBytesPerSizeT * 8)) - 1;
 

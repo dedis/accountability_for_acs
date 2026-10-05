@@ -13,11 +13,13 @@ CXX_BIN="${CXX:-c++}"
 case "${LONGFELLOW_HASH:-sha256}" in
   sha256)
     TARGET_SUFFIX=""
+    HASH_DEFS=()
     HASH_OBJS=("${BLD}/circuits/sha/CMakeFiles/flatsha.dir/flatsha256_witness.cc.o"
                "${BLD}/circuits/sha/CMakeFiles/flatsha.dir/sha256_constants.cc.o")
     ;;
   shake256)
     TARGET_SUFFIX="_pq"
+    HASH_DEFS=(-DPROOFS_EC_SHAKE256 -DPROOFS_SHAKE256)
     HASH_OBJS=("${BLD}/circuits/tests/sha3/CMakeFiles/sha3.dir/sha3_reference.cc.o"
                "${BLD}/circuits/tests/sha3/CMakeFiles/sha3.dir/sha3_round_constants.cc.o"
                "${BLD}/circuits/tests/sha3/CMakeFiles/sha3.dir/sha3_witness.cc.o")

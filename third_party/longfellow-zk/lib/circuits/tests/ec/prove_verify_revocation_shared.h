@@ -28,8 +28,16 @@ constexpr size_t kProveVerifyRevocTsBits = 43;
 constexpr size_t kProveVerifyRevocSlot = 14;
 constexpr size_t kProveVerifyRevocBitsPerLeaf = 253;
 
-// Public inputs: same as ProveVerify (17 incl. dummy) + 32 root bytes.
-constexpr size_t kProveVerifyRevocPublicSize = 17 + 32;
+// Bytes of a revocation tree node, leaves included: the hash output size
+// (48 for SHAKE256 with PROOFS_EC_SHAKE256, 32 for SHA-256).
+#ifdef PROOFS_EC_SHAKE256
+constexpr size_t kProveVerifyRevocNodeBytes = 48;
+#else
+constexpr size_t kProveVerifyRevocNodeBytes = 32;
+#endif
+
+// Public inputs: same as ProveVerify (17 incl. dummy) + the root bytes.
+constexpr size_t kProveVerifyRevocPublicSize = 17 + kProveVerifyRevocNodeBytes;
 
 class ProveVerifyRevocationHarnessP256;
 struct ProveVerifyRevocationHarnessP256Deleter {

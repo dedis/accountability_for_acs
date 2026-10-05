@@ -20,6 +20,10 @@
 // SHA256. For a pseudo-random function, this library uses AES in ECB mode.
 // Finally, this library provides a method to generate random bytes using the
 // openssl library.
+//
+// With PROOFS_SHAKE256 (the post-quantum build; not upstream), Hash is SHAKE256
+// with a 48-byte output (NIST category 3) and PRF is keyed SHAKE256. Every
+// translation unit of a program must agree on PROOFS_SHAKE256.
 
 #include <cstddef>
 #include <cstdint>
@@ -33,9 +37,8 @@
 namespace proofs {
 
 constexpr size_t kSHA256DigestSize = 32;
-constexpr size_t kPRFKeySize = 32;
+constexpr size_t kSHAKE256DigestSize = 48;
 constexpr size_t kPRFInputSize = 16;
-constexpr size_t kPRFOutputSize = 16;
 
 class SHA256 {
  public:
@@ -64,30 +67,71 @@ class SHA256 {
   SHA256_CTX sha_;
 };
 
+// SHAKE256 with a 48-byte output, with the interface of SHA256. Not upstream.
+class SHAKE256 {
+ public:
+  SHAKE256() : ctx_(EVP_MD_CTX_new()) {
+    check(ctx_ != nullptr, "EVP_MD_CTX_new failed");
+    check(EVP_DigestInit_ex(ctx_, EVP_shake256(), nullptr) == 1,
+          "EVP_DigestInit_ex failed");
+  }
+
+  ~SHAKE256() { EVP_MD_CTX_free(ctx_); }
+
+  SHAKE256(const SHAKE256&) = delete;
+  SHAKE256& operator=(const SHAKE256&) = delete;
+
+  void Update(const uint8_t bytes[/*n*/], size_t n) {
+    check(EVP_DigestUpdate(ctx_, bytes, n) == 1, "EVP_DigestUpdate failed");
+  }
+  void DigestData(uint8_t digest[/* kSHAKE256DigestSize */]) {
+    check(EVP_DigestFinalXOF(ctx_, digest, kSHAKE256DigestSize) == 1,
+          "EVP_DigestFinalXOF failed");
+  }
+  void CopyState(const SHAKE256& src) {
+    check(EVP_MD_CTX_copy_ex(ctx_, src.ctx_) == 1, "EVP_MD_CTX_copy_ex failed");
+  }
+
+  void Update8(uint64_t x) {
+    uint8_t buf[8];
+    for (size_t i = 0; i < 8; ++i) {
+      buf[i] = x & 0xff;
+      x >>= 8;
+    }
+    Update(buf, 8);
+  }
+
+ private:
+  EVP_MD_CTX* ctx_;
+};
+
 // A pseudo-random function interface. This implementation uses AES in ECB mode.
 // The caller must ensure that arguments are not reused.
-class PRF {
+class AesPRF {
  public:
-  explicit PRF(const uint8_t key[/*kPRFKeySize*/]) {
+  static constexpr size_t kKeySize = 32;
+  static constexpr size_t kOutputSize = 16;
+
+  explicit AesPRF(const uint8_t key[/*kKeySize*/]) {
     ctx_ = EVP_CIPHER_CTX_new();
     int ret =
         EVP_EncryptInit_ex(ctx_, EVP_aes_256_ecb(), nullptr, key, nullptr);
     check(ret == 1, "EVP_EncryptInit_ex failed");
   }
 
-  ~PRF() { EVP_CIPHER_CTX_free(ctx_); }
+  ~AesPRF() { EVP_CIPHER_CTX_free(ctx_); }
 
   // Disable copy for good measure.
-  PRF(const PRF&) = delete;
-  PRF& operator=(const PRF&) = delete;
+  AesPRF(const AesPRF&) = delete;
+  AesPRF& operator=(const AesPRF&) = delete;
 
   // Evaluate the PRF on the input and write the output to the output buffer.
   // This method should only be used internally by the Transcript class. The
   // caller must ensure that the input and output buffers are different.
   // This function implements a permutation, but we only need to exploit its
   // pseudo-random function property in this application.
-  void Eval(uint8_t out[/*kPRFOutputSize*/], uint8_t in[/*kPRFInputSize*/]) {
-    int out_len = static_cast<int>(kPRFOutputSize);
+  void Eval(uint8_t out[/*kOutputSize*/], uint8_t in[/*kPRFInputSize*/]) {
+    int out_len = static_cast<int>(kOutputSize);
     int ret = EVP_EncryptUpdate(ctx_, out, &out_len, in,
                                 static_cast<int>(kPRFInputSize));
     check(ret == 1, "EVP_EncryptUpdate failed");
@@ -96,6 +140,52 @@ class PRF {
  private:
   EVP_CIPHER_CTX* ctx_;
 };
+
+// A pseudo-random function: SHAKE256(key || in), squeezed to one rate block
+// (136 bytes), so that one Keccak-f call yields the whole output. Not upstream.
+// The caller must ensure that arguments are not reused.
+class ShakePRF {
+ public:
+  static constexpr size_t kKeySize = kSHAKE256DigestSize;
+  static constexpr size_t kOutputSize = 136;
+
+  explicit ShakePRF(const uint8_t key[/*kKeySize*/])
+      : keyed_(EVP_MD_CTX_new()), ctx_(EVP_MD_CTX_new()) {
+    check(keyed_ != nullptr && ctx_ != nullptr, "EVP_MD_CTX_new failed");
+    check(EVP_DigestInit_ex(keyed_, EVP_shake256(), nullptr) == 1 &&
+              EVP_DigestUpdate(keyed_, key, kKeySize) == 1,
+          "SHAKE256 PRF key setup failed");
+  }
+
+  ~ShakePRF() {
+    EVP_MD_CTX_free(ctx_);
+    EVP_MD_CTX_free(keyed_);
+  }
+
+  ShakePRF(const ShakePRF&) = delete;
+  ShakePRF& operator=(const ShakePRF&) = delete;
+
+  void Eval(uint8_t out[/*kOutputSize*/], uint8_t in[/*kPRFInputSize*/]) {
+    check(EVP_MD_CTX_copy_ex(ctx_, keyed_) == 1 &&
+              EVP_DigestUpdate(ctx_, in, kPRFInputSize) == 1 &&
+              EVP_DigestFinalXOF(ctx_, out, kOutputSize) == 1,
+          "SHAKE256 PRF failed");
+  }
+
+ private:
+  EVP_MD_CTX* keyed_;  // has absorbed the key
+  EVP_MD_CTX* ctx_;    // one evaluation
+};
+
+#ifdef PROOFS_SHAKE256
+using Hash = SHAKE256;
+using PRF = ShakePRF;
+constexpr size_t kHashDigestSize = kSHAKE256DigestSize;
+#else
+using Hash = SHA256;
+using PRF = AesPRF;
+constexpr size_t kHashDigestSize = kSHA256DigestSize;
+#endif
 
 // Generate n random bytes, following the openssl API convention.
 // This method will panic if the openssl library fails.

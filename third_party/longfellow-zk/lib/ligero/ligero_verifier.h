@@ -141,7 +141,7 @@ class LigeroVerifier {
                            const LigeroCommitment<Field>& commitment,
                            const LigeroProof<Field>& proof,
                            const size_t idx[/*nreq*/], const Field& F) {
-    auto updhash = [&](size_t r, SHA256& sha) {
+    auto updhash = [&](size_t r, Hash& sha) {
       LigeroCommon<Field>::column_hash(p.nrow, &proof.req_at(0, r), p.nreq, sha,
                                        F);
     };

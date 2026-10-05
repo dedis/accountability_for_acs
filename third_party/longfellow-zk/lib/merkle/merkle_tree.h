@@ -41,7 +41,7 @@ namespace proofs {
 
 // A digest of a Merkle tree.
 struct Digest {
-  static constexpr size_t kLength = kSHA256DigestSize;
+  static constexpr size_t kLength = kHashDigestSize;
   uint8_t data[kLength];
 
   bool operator==(const Digest& y) const {
@@ -49,7 +49,7 @@ struct Digest {
   }
 
   static Digest hash2(const Digest& L, const Digest& R) {
-    SHA256 sha;
+    Hash sha;
     sha.Update(L.data, kLength);
     sha.Update(R.data, kLength);
     Digest output;

@@ -427,7 +427,7 @@ class LigeroCommon {
   }
 
   static void column_hash(size_t n, const Elt x[/*n:incx*/], size_t incx,
-                          SHA256 &sha, const Field &F) {
+                          Hash &sha, const Field &F) {
     for (size_t i = 0; i < n; ++i) {
       uint8_t buf[Field::kBytes];
       F.to_bytes_field(buf, x[i * incx]);
@@ -440,7 +440,7 @@ class LigeroCommon {
 // same as Digest, but in theory Ligero should exist independently
 // of the Merkle tree.
 struct LigeroHash {
-  static constexpr size_t kLength = kSHA256DigestSize;
+  static constexpr size_t kLength = kHashDigestSize;
   uint8_t bytes[kLength];
 };
 

@@ -14,14 +14,14 @@ pub fn utf8_to_field(message: &str) -> Fq {
     Fq::from_be_bytes_mod_order(&Sha256::digest(message.as_bytes()))
 }
 
-/// `shake256(message, 32 bytes) mod p`, the output read big-endian.
+/// `shake256(message, 48 bytes) mod p`, the output read big-endian.
 #[cfg(feature = "pq")]
 pub fn utf8_to_field(message: &str) -> Fq {
     use sha3::digest::{ExtendableOutput, Update, XofReader};
 
     let mut shake = sha3::Shake256::default();
     shake.update(message.as_bytes());
-    let mut out = [0u8; 32];
+    let mut out = [0u8; 48];
     shake.finalize_xof().read(&mut out);
     Fq::from_be_bytes_mod_order(&out)
 }
@@ -50,21 +50,21 @@ mod tests {
     }
 
     /// Reference values from Python:
-    /// `int.from_bytes(hashlib.shake_256(label.encode()).digest(32), "big") % p`.
+    /// `int.from_bytes(hashlib.shake_256(label.encode()).digest(48), "big") % p`.
     #[cfg(feature = "pq")]
     #[test]
     fn matches_python_shake256() {
         assert_eq!(
             utf8_to_field("birthDate").to_string(),
-            "2432600820075956650057236295598837727148010477977098202214308242479968788307"
+            "11807514439683247212017283394335837208753695072419100719280613540195876246484"
         );
         assert_eq!(
             utf8_to_field("IDx").to_string(),
-            "821813632651930500733163207434146967684851077976555995501718932720860447588"
+            "7018447549559151877109865022700913166771138480930577080601927634637682476136"
         );
         assert_eq!(
             utf8_to_field("revocationIndex").to_string(),
-            "2885427765150852092277827815434377694420497462120866805931999758378821402326"
+            "21285170661508533374966116464893546470871927511869494647984467112494228072"
         );
     }
 }

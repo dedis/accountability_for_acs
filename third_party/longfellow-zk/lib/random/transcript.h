@@ -32,8 +32,8 @@ FSPRF and Transcript together used implement the Fiat-Shamir transform.
 */
 class FSPRF  {
  public:
-  explicit FSPRF(const uint8_t key[kPRFKeySize])
-      : prf_(key), nblock_(0), rdptr_(kPRFOutputSize) {}
+  explicit FSPRF(const uint8_t key[PRF::kKeySize])
+      : prf_(key), nblock_(0), rdptr_(PRF::kOutputSize) {}
 
   // Disable copy for good measure.
   explicit FSPRF(const FSPRF&) = delete;
@@ -45,7 +45,7 @@ class FSPRF  {
 
   void bytes(uint8_t buf[/*n*/], size_t n) {
     while (n-- > 0) {
-      if (rdptr_ == kPRFOutputSize) {
+      if (rdptr_ == PRF::kOutputSize) {
         refill();
       }
       *buf++ = saved_[rdptr_++];
@@ -64,7 +64,7 @@ class FSPRF  {
   PRF prf_;
   uint64_t nblock_;
   size_t rdptr_;       // read pointer into saved[]
-  uint8_t saved_[kPRFOutputSize];  // saved pseudo-random bytes
+  uint8_t saved_[PRF::kOutputSize];  // saved pseudo-random bytes
 };
 
 class Transcript : public RandomEngine {
@@ -88,7 +88,7 @@ class Transcript : public RandomEngine {
   // Generate bytes by via the current FSPRF object.
   void bytes(uint8_t buf[/*n*/], size_t n) override {
     if (!prf_) {
-      uint8_t key[kPRFKeySize];
+      uint8_t key[PRF::kKeySize];
       get(key);
       prf_ = std::make_unique<FSPRF>(key);
     }
@@ -96,10 +96,11 @@ class Transcript : public RandomEngine {
   }
 
   // snapshot the hash of the transcript so far
-  void get(uint8_t key[/*kPRFKeySize*/]) {
-    check(kPRFKeySize == kSHA256DigestSize, "prf key size != digest output");
+  void get(uint8_t key[/*PRF::kKeySize*/]) {
+    static_assert(PRF::kKeySize == kHashDigestSize,
+                  "prf key size != digest output");
     // fork the state because we will finalize it
-    SHA256 tmp_hash;
+    Hash tmp_hash;
     tmp_hash.CopyState(sha_);
     tmp_hash.DigestData(key);
   }
@@ -152,7 +153,7 @@ class Transcript : public RandomEngine {
   }
 
  private:
-  explicit Transcript(const SHA256& sha, size_t version)
+  explicit Transcript(const Hash& sha, size_t version)
       : sha_(), version_(version) {
     sha_.CopyState(sha);
   }
@@ -184,7 +185,7 @@ class Transcript : public RandomEngine {
     write_untyped(buf, sizeof(buf));
   }
 
-  SHA256 sha_;
+  Hash sha_;
   std::unique_ptr<FSPRF> prf_;
   const size_t version_;  // version 4+ fixes the TAG_ARRAY typo.
 };

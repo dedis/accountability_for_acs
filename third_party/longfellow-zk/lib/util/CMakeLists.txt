@@ -15,3 +15,7 @@
 add_library(util OBJECT log.cc crypto.cc)
 target_link_libraries(util crypto zstd)
 
+
+# SHAKE256 hash and PRF of the pq build (not upstream).
+proofs_add_test(crypto_shake256_test)
+target_compile_definitions(crypto_shake256_test PRIVATE PROOFS_SHAKE256)

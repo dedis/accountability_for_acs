@@ -29,7 +29,7 @@
 namespace proofs {
 
 struct MerkleNonce {
-  static constexpr size_t kLength = kSHA256DigestSize;
+  static constexpr size_t kLength = kHashDigestSize;
   uint8_t bytes[kLength];
 };
 
@@ -47,10 +47,10 @@ class MerkleCommitment {
  public:
   explicit MerkleCommitment(size_t n) : n_(n), mt_(n), nonce_(n) {}
 
-  Digest commit(const std::function<void(size_t, SHA256 &)> &updhash,
+  Digest commit(const std::function<void(size_t, Hash &)> &updhash,
                 RandomEngine &rng) {
     for (size_t i = 0; i < n_; ++i) {
-      SHA256 sha;
+      Hash sha;
       rng.bytes(nonce_[i].bytes, MerkleNonce::kLength);
       sha.Update(nonce_[i].bytes, MerkleNonce::kLength);
       updhash(i, sha);
@@ -83,11 +83,11 @@ class MerkleCommitmentVerifier {
  public:
   static bool verify(size_t n, const Digest &root, const MerkleProof &proof,
                      const size_t pos[/*nreq*/], size_t nreq,
-                     const std::function<void(size_t, SHA256 &)> &updhash) {
+                     const std::function<void(size_t, Hash &)> &updhash) {
     // Assemble the expected leaf values
     std::vector<Digest> leaves(nreq);
     for (size_t r = 0; r < nreq; ++r) {
-      SHA256 sha;
+      Hash sha;
       sha.Update(proof.nonce[r].bytes, MerkleNonce::kLength);
       updhash(r, sha);
       sha.DigestData(leaves[r].data);

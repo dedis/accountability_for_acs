@@ -71,10 +71,20 @@ const P256Traits::EC& P256Traits::ec() { return p256; }
 const P256Traits::Field& P256Traits::field() { return p256_base; }
 const P256Traits::Scalar& P256Traits::scalar_field() { return p256_scalar; }
 
-#ifndef PROOFS_EC_SHAKE256
+#ifdef PROOFS_EC_SHAKE256
+static_assert(kProveVerifyRevocNodeBytes == kSHAKE256DigestSize);
+// The credential hash input: the 32 leaf digests.
+constexpr size_t kLeafDigestBytes = kSHAKE256DigestSize;
+#else
 constexpr size_t kShaPluckerBits = 3;
 constexpr size_t kShaBlocks64 = 2;
+constexpr size_t kLeafDigestBytes = 32;
 #endif
+constexpr size_t kLeafMsgBytes = kProveVerifyRevocCredentialAttrs * kLeafDigestBytes;
+
+// A revocation tree node; a leaf holds kProveVerifyRevocBitsPerLeaf status bits.
+constexpr size_t kNodeBytes = kProveVerifyRevocNodeBytes;
+using Node = std::array<uint8_t, kNodeBytes>;
 
 template <class Field>
 static void to_bytes_be(const Field& f, const typename Field::Elt& x,
@@ -232,28 +242,26 @@ static void push_sha64_bw(DenseFiller<Fp256Base>& f,
 
 #endif
 
-static void zero_digest(std::array<uint8_t, 32>& d) { d.fill(0); }
+static void zero_digest(Node& d) { d.fill(0); }
 
-static std::array<uint8_t, 32> hash2_be(const std::array<uint8_t, 32>& L,
-                                        const std::array<uint8_t, 32>& R) {
-  uint8_t msg64[64];
-  std::memcpy(msg64, L.data(), 32);
-  std::memcpy(msg64 + 32, R.data(), 32);
+static Node hash2_be(const Node& L, const Node& R) {
+  uint8_t msg[2 * kNodeBytes];
+  std::memcpy(msg, L.data(), kNodeBytes);
+  std::memcpy(msg + kNodeBytes, R.data(), kNodeBytes);
 #ifdef PROOFS_EC_SHAKE256
-  return shake256(msg64, 64);
+  return shake256(msg, sizeof(msg));
 #else
-  std::array<uint8_t, 32> out{};
+  Node out{};
   SHA256 sha;
-  sha.Update(msg64, 64);
+  sha.Update(msg, sizeof(msg));
   sha.DigestData(out.data());
   return out;
 #endif
 }
 
-static std::array<std::array<uint8_t, 32>, 64> build_uniform_zero_level_hashes(
-    size_t depth) {
+static std::array<Node, 64> build_uniform_zero_level_hashes(size_t depth) {
   check(depth < 64, "depth too large");
-  std::array<std::array<uint8_t, 32>, 64> level{};
+  std::array<Node, 64> level{};
   zero_digest(level[0]);
   for (size_t i = 0; i < depth; ++i) {
     level[i + 1] = hash2_be(level[i], level[i]);
@@ -262,7 +270,7 @@ static std::array<std::array<uint8_t, 32>, 64> build_uniform_zero_level_hashes(
 }
 
 struct PathWitness {
-  std::array<std::array<uint8_t, 32>, 32> path_elements{};
+  std::array<Node, 32> path_elements{};
   std::array<Fp256Base::Elt, 32> path_indices{};
 #ifdef PROOFS_EC_SHAKE256
   std::array<Shake256Native, 32> node_hash{};
@@ -273,7 +281,7 @@ struct PathWitness {
 };
 
 static void fill_path_for_uniform_zero_tree(size_t depth, size_t leaf_index,
-                                            const std::array<std::array<uint8_t, 32>, 64>& levels,
+                                            const std::array<Node, 64>& levels,
                                             PathWitness& out) {
   out.depth = depth;
   for (size_t d = 0; d < depth; ++d) {
@@ -281,14 +289,14 @@ static void fill_path_for_uniform_zero_tree(size_t depth, size_t leaf_index,
     out.path_indices[d] = is_right ? p256_base.one() : p256_base.zero();
     out.path_elements[d] = levels[d];
 
-    uint8_t msg64[64];
-    std::memcpy(msg64, levels[d].data(), 32);
-    std::memcpy(msg64 + 32, levels[d].data(), 32);
+    uint8_t msg[2 * kNodeBytes];
+    std::memcpy(msg, levels[d].data(), kNodeBytes);
+    std::memcpy(msg + kNodeBytes, levels[d].data(), kNodeBytes);
 #ifdef PROOFS_EC_SHAKE256
-    out.node_hash[d].compute(msg64, 64);
+    out.node_hash[d].compute(msg, sizeof(msg));
     check(out.node_hash[d].digest == levels[d + 1], "uniform zero path bw mismatch");
 #else
-    sha256_witness_64(msg64, out.node_bw[d]);
+    sha256_witness_64(msg, out.node_bw[d]);
     const auto got = digest_bytes_from_bw(out.node_bw[d]);
     check(got == levels[d + 1], "uniform zero path bw mismatch");
 #endif
@@ -350,11 +358,11 @@ class ProveVerifyRevocationCircuit {
 
   // SHAKE256 over the 32 leaf digests.
   struct CredentialShaWitness {
-    v8 msg[kProveVerifyRevocCredentialMsgBytes];
+    v8 msg[kLeafMsgBytes];
     typename Hash::Witness hash;
     void input(const LogicCircuit& lc) {
       for (auto& b : msg) b = lc.template vinput<8>();
-      hash.input(lc, kProveVerifyRevocCredentialMsgBytes);
+      hash.input(lc, kLeafMsgBytes);
     }
   };
 #else
@@ -418,8 +426,8 @@ class ProveVerifyRevocationCircuit {
     EltW credential_index;
     EltW leaf_index;
     EltW bit_index;
-    v8 leaf_be[32];
-    std::array<std::array<v8, 32>, Depth> path_sib;
+    v8 leaf_be[kNodeBytes];
+    std::array<std::array<v8, kNodeBytes>, Depth> path_sib;
     std::array<EltW, Depth> path_idx;
 #ifdef PROOFS_EC_SHAKE256
     std::array<typename Hash::Witness, Depth> node_hash;
@@ -469,7 +477,7 @@ class ProveVerifyRevocationCircuit {
       }
       for (size_t d = 0; d < Depth; ++d) {
 #ifdef PROOFS_EC_SHAKE256
-        node_hash[d].input(lc, 64);
+        node_hash[d].input(lc, 2 * kNodeBytes);
 #else
         for (auto& w : node_bw[d]) w.input(lc);
 #endif
@@ -484,7 +492,7 @@ class ProveVerifyRevocationCircuit {
                       EltW t_pub, EltW c1x_pub, EltW c1y_pub, EltW c2x_pub,
                       EltW c2y_pub, EltW c3x_pub, EltW c3y_pub, EltW c4_rx_pub,
                       EltW c4_ry_pub, EltW c4_s_pub, EltW now_pub, EltW max_birth_pub,
-                      const std::array<v8, 32>& revocation_root_pub,
+                      const std::array<v8, kNodeBytes>& revocation_root_pub,
                       const Witness& w) const {
     EltW zero = lc_.konst(lc_.zero());
     EltW one = lc_.konst(lc_.one());
@@ -645,7 +653,7 @@ class ProveVerifyRevocationCircuit {
 
 #ifdef PROOFS_EC_SHAKE256
     EltW digest_field = repack_be32_from_bytes(
-        shake.digest(w.credential_sha.msg, kProveVerifyRevocCredentialMsgBytes,
+        shake.digest(w.credential_sha.msg, kLeafMsgBytes,
                      w.credential_sha.hash).data());
 #else
     sha.assert_message_hash(kProveVerifyRevocCredentialShaBlocks, w.credential_sha.nb,
@@ -692,13 +700,13 @@ class ProveVerifyRevocationCircuit {
     for (auto& b : w.leaf_be) lc_.vassert_eq(b, lc_.template vbit<8>(0x00));
 
 #ifdef PROOFS_EC_SHAKE256
-    auto hash2_64bytes = [&](const std::array<v8, 32>& left,
-                             const std::array<v8, 32>& right,
+    auto hash2_64bytes = [&](const std::array<v8, kNodeBytes>& left,
+                             const std::array<v8, kNodeBytes>& right,
                              const typename Hash::Witness& hw) {
-      v8 in[64];
-      for (size_t i = 0; i < 32; ++i) in[i] = left[i];
-      for (size_t i = 0; i < 32; ++i) in[32 + i] = right[i];
-      return shake.digest(in, 64, hw);
+      v8 in[2 * kNodeBytes];
+      for (size_t i = 0; i < kNodeBytes; ++i) in[i] = left[i];
+      for (size_t i = 0; i < kNodeBytes; ++i) in[kNodeBytes + i] = right[i];
+      return shake.digest(in, 2 * kNodeBytes, hw);
     };
 #else
     auto digest_from_bw = [&](const ShaBlockWitness bw[2]) {
@@ -731,13 +739,13 @@ class ProveVerifyRevocationCircuit {
     };
 #endif
 
-    std::array<v8, 32> cur{};
-    for (size_t i = 0; i < 32; ++i) cur[i] = w.leaf_be[i];
+    std::array<v8, kNodeBytes> cur{};
+    for (size_t i = 0; i < kNodeBytes; ++i) cur[i] = w.leaf_be[i];
     for (size_t d = 0; d < Depth; ++d) {
       BitW bi(w.path_idx[d], lc_.f_);
       lc_.assert_is_bit(bi);
-      std::array<v8, 32> left{}, right{};
-      for (size_t i = 0; i < 32; ++i) {
+      std::array<v8, kNodeBytes> left{}, right{};
+      for (size_t i = 0; i < kNodeBytes; ++i) {
         lc_.vmux(bi, left[i], w.path_sib[d][i], cur[i]);
         lc_.vmux(bi, right[i], cur[i], w.path_sib[d][i]);
       }
@@ -747,7 +755,7 @@ class ProveVerifyRevocationCircuit {
       cur = hash2_64bytes(left, right, w.node_bw[d].data());
 #endif
     }
-    for (size_t i = 0; i < 32; ++i) lc_.vassert_eq(cur[i], revocation_root_pub[i]);
+    for (size_t i = 0; i < kNodeBytes; ++i) lc_.vassert_eq(cur[i], revocation_root_pub[i]);
   }
 
  private:
@@ -913,7 +921,7 @@ struct BenchmarkContextRevoc {
   std::array<std::array<uint8_t, 32>, kProveVerifyRevocCredentialAttrs> attr_values{};
   typename Field::Elt credential_digest_pub{};
 #ifdef PROOFS_EC_SHAKE256
-  std::array<uint8_t, kProveVerifyRevocCredentialMsgBytes> credential_msg{};
+  std::array<uint8_t, kLeafMsgBytes> credential_msg{};
   Shake256Native credential_hash;
 #else
   std::array<uint8_t, 32> credential_digest_be{};
@@ -954,10 +962,10 @@ struct BenchmarkContextRevoc {
   typename Field::Elt credential_index_elt{};
   typename Field::Elt leaf_index_elt{};
   typename Field::Elt bit_index_elt{};
-  std::array<uint8_t, 32> revocation_root{};
-  std::array<uint8_t, 32> leaf{};
+  Node revocation_root{};
+  Node leaf{};
   PathWitness path{};
-  std::array<std::array<uint8_t, 32>, 64> level_hashes{};
+  std::array<Node, 64> level_hashes{};
 
   size_t show_counter_{0};
   bool credential_initialized_{false};
@@ -1071,7 +1079,7 @@ struct BenchmarkContextRevoc {
       std::memset(out, 0, 32);
       out[31] = idx;
     };
-    std::array<uint8_t, kProveVerifyRevocCredentialMsgBytes> leaf_msg{};
+    std::array<uint8_t, kLeafMsgBytes> leaf_msg{};
     for (size_t i = 0; i < kProveVerifyRevocCredentialAttrs; ++i) {
       uint8_t name_be[32];
       be32_index(name_be, static_cast<uint8_t>(i));
@@ -1080,9 +1088,9 @@ struct BenchmarkContextRevoc {
       std::memcpy(msg64 + 32, attr_values[i].data(), 32);
 #ifdef PROOFS_EC_SHAKE256
       const auto leaf_digest = shake256(msg64, 64);
-      std::memcpy(&leaf_msg[i * 32], leaf_digest.data(), 32);
+      std::memcpy(&leaf_msg[i * kLeafDigestBytes], leaf_digest.data(), kLeafDigestBytes);
 #else
-      sha256_64_digest(msg64, &leaf_msg[i * 32]);
+      sha256_64_digest(msg64, &leaf_msg[i * kLeafDigestBytes]);
 #endif
     }
 
@@ -1300,7 +1308,7 @@ std::unique_ptr<Circuit<Fp256Base>> make_circuit_revoc() {
     max_birth[i] = lc.eltw_input();
   }
 
-  std::array<v8, 32> root_pub{};
+  std::array<v8, kNodeBytes> root_pub{};
   for (auto& b : root_pub) b = lc.template vinput<8>();
 
   Q.private_input();
@@ -1346,7 +1354,7 @@ void fill_input_revoc(Dense<Fp256Base>& W, const BenchmarkContextRevoc<Depth>& c
   filler.push_back(ctx.c4_s);
   filler.push_back(ctx.now_pub);
   filler.push_back(ctx.max_birth_pub);
-  for (size_t i = 0; i < 32; ++i) {
+  for (size_t i = 0; i < kNodeBytes; ++i) {
     filler.push_back(ctx.revocation_root[i], 8, P256Traits::field());
   }
 
@@ -1454,9 +1462,9 @@ void fill_input_revoc(Dense<Fp256Base>& W, const BenchmarkContextRevoc<Depth>& c
   filler.push_back(ctx.credential_index_elt);
   filler.push_back(ctx.leaf_index_elt);
   filler.push_back(ctx.bit_index_elt);
-  for (size_t i = 0; i < 32; ++i) filler.push_back(ctx.leaf[i], 8, P256Traits::field());
+  for (size_t i = 0; i < kNodeBytes; ++i) filler.push_back(ctx.leaf[i], 8, P256Traits::field());
   for (size_t d = 0; d < Depth; ++d) {
-    for (size_t i = 0; i < 32; ++i) {
+    for (size_t i = 0; i < kNodeBytes; ++i) {
       filler.push_back(ctx.path.path_elements[d][i], 8, P256Traits::field());
     }
     filler.push_back(ctx.path.path_indices[d]);

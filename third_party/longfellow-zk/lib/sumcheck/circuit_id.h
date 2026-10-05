@@ -27,10 +27,10 @@ namespace proofs {
 // This method produces a unique name for a circuit. It does not match
 // the serialization method for the circuit.
 template <class Field>
-void circuit_id(uint8_t id[/*32*/], const Circuit<Field>& c, const Field& F) {
+void circuit_id(uint8_t id[/*kHashDigestSize*/], const Circuit<Field>& c, const Field& F) {
   const uint64_t CHAR2 = 0x2;
   const uint64_t ODD = 0x1;
-  SHA256 sha;
+  Hash sha;
   uint8_t tmp[Field::kBytes];
   if (F.kCharacteristicTwo) {
     // Characteristic two fields are uniquely determined by their length
