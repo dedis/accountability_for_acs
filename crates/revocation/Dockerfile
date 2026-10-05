@@ -12,8 +12,11 @@ WORKDIR /bench
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 
-RUN cargo build --release --locked -p revocation \
- && cargo test --release --locked -p revocation \
+# CARGO_FEATURES: empty for the default post-quantum (pq) build;
+# --build-arg CARGO_FEATURES=--no-default-features builds the classical one.
+ARG CARGO_FEATURES=""
+RUN cargo build --release --locked -p revocation $CARGO_FEATURES \
+ && cargo test --release --locked -p revocation $CARGO_FEATURES \
  && ./target/release/revocation_verify_link
 
 CMD ["bash"]

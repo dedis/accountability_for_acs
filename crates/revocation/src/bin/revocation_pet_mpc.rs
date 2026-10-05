@@ -4,7 +4,8 @@
 //! - Blinded pairwise differences of `C1` and `C3`
 //! - Sequential partial decryption by police, judge and NGO
 //! - MP-SPDZ decides, per row, whether the CFT recurs at least `tau` times
-//! - Integrity check `poseidon(ID, t, sk·C2) == C4`, then reveal
+//! - Integrity check `H(ID, t, sk·C2) == C4` (`H`: [`revocation::hash`]), then
+//!   reveal
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -89,9 +90,10 @@ struct Batch {
     n_recurring: usize,
 }
 
-/// `C4 = poseidon(ID.x, ID.y, t, D2.x, D2.y)`.
+/// `C4 = H(ID.x, ID.y, t, D2.x, D2.y)`, with `H` Poseidon, or SHAKE256 with
+/// the `pq` feature.
 fn c4_hash(poseidon: &Poseidon, id: PointAffine, t: Fr, d2: PointAffine) -> Fq {
-    poseidon.hash(&[id.x, id.y, fr_to_fq(t), d2.x, d2.y])
+    revocation::hash::to_fq(poseidon, &[id.x, id.y, fr_to_fq(t), d2.x, d2.y])
 }
 
 /// 20% of slots share one identity, 5% another, the rest are unique.

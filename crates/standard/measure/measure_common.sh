@@ -8,6 +8,26 @@ BLD="${LONGFELLOW_BUILD_DIR:?set LONGFELLOW_BUILD_DIR to the Longfellow CMake bu
 
 CXX_BIN="${CXX:-c++}"
 
+# LONGFELLOW_HASH=shake256 measures the post-quantum (pq) targets, which use
+# SHAKE256 in place of SHA-256.
+case "${LONGFELLOW_HASH:-sha256}" in
+  sha256)
+    TARGET_SUFFIX=""
+    HASH_OBJS=("${BLD}/circuits/sha/CMakeFiles/flatsha.dir/flatsha256_witness.cc.o"
+               "${BLD}/circuits/sha/CMakeFiles/flatsha.dir/sha256_constants.cc.o")
+    ;;
+  shake256)
+    TARGET_SUFFIX="_pq"
+    HASH_OBJS=("${BLD}/circuits/tests/sha3/CMakeFiles/sha3.dir/sha3_reference.cc.o"
+               "${BLD}/circuits/tests/sha3/CMakeFiles/sha3.dir/sha3_round_constants.cc.o"
+               "${BLD}/circuits/tests/sha3/CMakeFiles/sha3.dir/sha3_witness.cc.o")
+    ;;
+  *)
+    echo "LONGFELLOW_HASH must be sha256 or shake256" >&2
+    exit 1
+    ;;
+esac
+
 # OpenSSL / zstd: Homebrew on macOS; system paths on Debian/Ubuntu (Docker).
 OPENSSL_INC="${OPENSSL_INC:-}"
 LINK_LIB_DIRS=()

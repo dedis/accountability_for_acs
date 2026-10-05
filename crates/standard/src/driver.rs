@@ -44,6 +44,7 @@ pub fn run(bench: &Bench, common: Common, filter: Option<String>) -> Result<()> 
 
     if !common.compact {
         println!("Backend: {}", bench.backend);
+        println!("Hash: {}", crate::HASH);
         println!(
             "Repetitions (outer samples): {}  (BENCH_N; --repetitions / --n)",
             common.repetitions

@@ -35,8 +35,12 @@
 #include "circuits/logic/bit_plucker_encoder.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#ifdef PROOFS_EC_SHAKE256
+#include "circuits/tests/ec/shake256_hash.h"
+#else
 #include "circuits/sha/flatsha256_circuit.h"
 #include "circuits/sha/flatsha256_witness.h"
+#endif
 #include "random/secure_random_engine.h"
 #include "random/transcript.h"
 #include "util/crypto.h"
@@ -80,6 +84,13 @@ static void to_bytes_be(const Field& f, const typename Field::Elt& x,
   uint8_t tmp[32];
   f.to_bytes_field(tmp, x);
   for (size_t i = 0; i < 32; ++i) out[i] = tmp[31 - i];
+}
+
+template <class Field>
+static typename Field::Elt of_bytes_be(const Field& f, const uint8_t be[32]) {
+  uint8_t le[32];
+  for (size_t i = 0; i < 32; ++i) le[i] = be[31 - i];
+  return f.of_bytes_field(le).value();
 }
 
 template <class Field>
@@ -154,9 +165,13 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
   using Ecdsa = VerifyCircuit<LogicCircuit, Field, EC>;
   static constexpr size_t kShaPluckerBits = 3;
 
+#ifdef PROOFS_EC_SHAKE256
+  using Hash = Shake256Hash<LogicCircuit>;
+#else
   using Flatsha =
       FlatSHA256Circuit<LogicCircuit, BitPlucker<LogicCircuit, kShaPluckerBits>>;
   using ShaBlockWitness = typename Flatsha::BlockWitness;
+#endif
   using v8 = typename LogicCircuit::v8;
   using v256 = typename LogicCircuit::v256;
 
@@ -165,6 +180,17 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
   static constexpr size_t kDigestBytes = 32;
 
  public:
+#ifdef PROOFS_EC_SHAKE256
+  // SHAKE256 over the 32 leaf digests.
+  struct CredentialShaWitness {
+    v8 msg[kProveVerifyNoCftCredentialMsgBytes];
+    typename Hash::Witness hash;
+    void input(const LogicCircuit& lc) {
+      for (auto& b : msg) b = lc.template vinput<8>();
+      hash.input(lc, kProveVerifyNoCftCredentialMsgBytes);
+    }
+  };
+#else
   struct CredentialShaWitness {
     v8 nb;
     v8 sha_in[64 * kProveVerifyNoCftCredentialShaBlocks];
@@ -179,6 +205,7 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
       }
     }
   };
+#endif
 
   struct Witness {
     typename Ecdsa::Witness issuer_sig;
@@ -195,7 +222,9 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
 
     v8 attr_bytes[kNumAttrs][kDigestBytes];
     CredentialShaWitness credential_sha;
+#ifndef PROOFS_EC_SHAKE256
     v256 credential_digest_bits;
+#endif
 
     void input(const LogicCircuit& lc) {
       issuer_sig.input(lc);
@@ -215,7 +244,9 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
         }
       }
       credential_sha.input(lc);
+#ifndef PROOFS_EC_SHAKE256
       credential_digest_bits = lc.template vinput<256>();
+#endif
     }
   };
 
@@ -225,7 +256,11 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
 
   void prove_relation(EltW issuer_x, EltW issuer_y, EltW m_pub, EltW now_pub,
                       EltW max_birth_pub, const Witness& w) const {
+#ifdef PROOFS_EC_SHAKE256
+    Hash shake(lc_);
+#else
     Flatsha sha(lc_);
+#endif
 
     auto repack_be32_from_bytes = [&](const v8 be[32]) -> EltW {
       EltW h = lc_.konst(0);
@@ -261,12 +296,19 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
     lc_.assert_eq(now_val, now_pub);
     lc_.assert_eq(max_birth_val, max_birth_pub);
 
+#ifdef PROOFS_EC_SHAKE256
+    // SHAKE256 over 32 Merkle-style leaf digests (each SHAKE256(be32(i)||attr_i)).
+    EltW digest_field = repack_be32_from_bytes(
+        shake.digest(w.credential_sha.msg, kProveVerifyNoCftCredentialMsgBytes,
+                     w.credential_sha.hash).data());
+#else
     // Flat SHA-256 over 32 Merkle-style leaf digests (each SHA256(be32(i)||attr_i)).
     sha.assert_message_hash(kProveVerifyNoCftCredentialShaBlocks, w.credential_sha.nb,
                             w.credential_sha.sha_in, w.credential_digest_bits,
                             w.credential_sha.sha_bw);
     EltW digest_field = repack32(
         sha, w.credential_sha.sha_bw[kProveVerifyNoCftCredentialShaBlocks - 1].h1);
+#endif
 
     // Bind only the non-CFT attributes to their slots.
     lc_.assert_eq(repack_be32_from_bytes(w.attr_bytes[4]), birth_val);
@@ -303,6 +345,7 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
   }
 
  private:
+#ifndef PROOFS_EC_SHAKE256
   EltW repack32(const Flatsha& sha,
                 const typename Flatsha::packed_v32 H[8]) const {
     EltW h = lc_.konst(0);
@@ -316,6 +359,7 @@ class CredentialCommitmentProveVerifyNoCftCircuit {
     }
     return h;
   }
+#endif
 
   const LogicCircuit& lc_;
   const EC& ec_;
@@ -355,10 +399,15 @@ struct BenchmarkContext {
   typename Field::Elt max_birth_pub;
 
   std::array<std::array<uint8_t, 32>, kProveVerifyNoCftCredentialAttrs> attr_values{};
+#ifdef PROOFS_EC_SHAKE256
+  std::array<uint8_t, kProveVerifyNoCftCredentialMsgBytes> credential_msg{};
+  Shake256Native credential_hash;
+#else
   std::array<uint8_t, 32> credential_digest_be{};
   std::array<uint8_t, 64 * kProveVerifyNoCftCredentialShaBlocks> credential_sha_in{};
   std::array<FlatSHA256Witness::BlockWitness, kProveVerifyNoCftCredentialShaBlocks>
       credential_sha_bw{};
+#endif
 
   typename Field::Elt hw_pk_x;
   typename Field::Elt hw_pk_y;
@@ -457,11 +506,13 @@ struct BenchmarkContext {
       std::memcpy(attr_values[i].data(), &attr_msg[i * 32], 32);
     }
 
+#ifndef PROOFS_EC_SHAKE256
     auto sha256_64_digest = [](const uint8_t msg64[64], uint8_t out[32]) {
       SHA256 sha;
       sha.Update(msg64, 64);
       sha.DigestData(out);
     };
+#endif
     auto be32_index = [](uint8_t out[32], uint8_t idx) {
       std::memset(out, 0, 32);
       out[31] = idx;
@@ -473,9 +524,18 @@ struct BenchmarkContext {
       uint8_t msg64[64];
       std::memcpy(msg64, name_be, 32);
       std::memcpy(msg64 + 32, attr_values[i].data(), 32);
+#ifdef PROOFS_EC_SHAKE256
+      const auto leaf = shake256(msg64, 64);
+      std::memcpy(&leaf_msg[i * 32], leaf.data(), 32);
+#else
       sha256_64_digest(msg64, &leaf_msg[i * 32]);
+#endif
     }
 
+#ifdef PROOFS_EC_SHAKE256
+    credential_msg = leaf_msg;
+    credential_hash.compute(credential_msg.data(), credential_msg.size());
+#else
     uint8_t cred_nb = 0;
     FlatSHA256Witness::transform_and_witness_message(
         kProveVerifyNoCftCredentialMsgBytes, leaf_msg.data(),
@@ -492,6 +552,7 @@ struct BenchmarkContext {
         credential_digest_be[4 * j + 3] = static_cast<uint8_t>(w);
       }
     }
+#endif
 
     auto fill_bits_from_u64 =
         [&](std::array<typename Field::Elt, kProveVerifyNoCftTsBits>& out, uint64_t x) {
@@ -505,8 +566,13 @@ struct BenchmarkContext {
     fill_bits_from_u64(max_birth_bits, max_birth_ms);
 
     {
+#ifdef PROOFS_EC_SHAKE256
+      const typename Field::Elt digest_pub =
+          of_bytes_be(field, credential_hash.digest.data());
+#else
       const typename Field::Elt digest_pub =
           sha_state_to_field(field, credential_sha_bw[kProveVerifyNoCftCredentialShaBlocks - 1].h1);
+#endif
       uint8_t e_be[32];
       to_bytes_be(field, digest_pub, e_be);
 
@@ -635,7 +701,9 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
 
   if (!prover) return;
 
+#ifndef PROOFS_EC_SHAKE256
   BitPluckerEncoder<Field, 3> enc(Traits::field());
+#endif
 
   auto push_sig = [&](const auto& src) {
     filler.push_back(src.rx_);
@@ -670,6 +738,10 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
     }
   }
 
+#ifdef PROOFS_EC_SHAKE256
+  for (uint8_t b : ctx.credential_msg) filler.push_back(b, 8, Traits::field());
+  ctx.credential_hash.push(filler, Traits::field());
+#else
   filler.push_back(static_cast<uint8_t>(kProveVerifyNoCftCredentialShaBlocks), 8, Traits::field());
   for (size_t i = 0; i < 64 * kProveVerifyNoCftCredentialShaBlocks; ++i) {
     filler.push_back(ctx.credential_sha_in[i], 8, Traits::field());
@@ -692,6 +764,7 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
     const uint8_t bit = (byte >> (j % 8)) & 1;
     filler.push_back(bit ? Traits::field().one() : Traits::field().zero());
   }
+#endif
 
   if (filler.size() != W.n1_) {
     log(ERROR, "fill_input size mismatch: filled=%zu expected=%zu", filler.size(),

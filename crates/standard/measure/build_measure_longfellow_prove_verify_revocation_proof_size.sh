@@ -11,16 +11,16 @@ source "${SCRIPT_DIR}/measure_common.sh"
 MEASURE_CC="${SCRIPT_DIR}/measure_longfellow_prove_verify_revocation_proof_size.cc"
 OUT_BIN="${BLD}/measure_longfellow_prove_verify_revocation_proof_size"
 
-if [[ ! -x "${BLD}/circuits/tests/ec/prove_verify_revocation_test" ]]; then
+if [[ ! -x "${BLD}/circuits/tests/ec/prove_verify_revocation${TARGET_SUFFIX}_test" ]]; then
   echo "Build longfellow-zk first:" >&2
-  echo "  cmake -S ${LIB} -B ${BLD} -DCMAKE_BUILD_TYPE=Release && cmake --build ${BLD} -j --target prove_verify_revocation_test" >&2
+  echo "  cmake -S ${LIB} -B ${BLD} -DCMAKE_BUILD_TYPE=Release && cmake --build ${BLD} -j --target prove_verify_revocation${TARGET_SUFFIX}_test" >&2
   exit 1
 fi
 
-echo "Rebuilding prove_verify_revocation_test ..."
-cmake --build "${BLD}" -j --target prove_verify_revocation_test
+echo "Rebuilding prove_verify_revocation${TARGET_SUFFIX}_test ..."
+cmake --build "${BLD}" -j --target prove_verify_revocation${TARGET_SUFFIX}_test
 
-TEST_DIR="${BLD}/circuits/tests/ec/CMakeFiles/prove_verify_revocation_test.dir"
+TEST_DIR="${BLD}/circuits/tests/ec/CMakeFiles/prove_verify_revocation${TARGET_SUFFIX}_test.dir"
 echo "Compiling ${OUT_BIN} ..."
 "${CXX_BIN}" -std=gnu++20 -O3 -DNDEBUG \
   -I"${LIB}" -I"${BLD}" ${OPENSSL_INC} \
@@ -35,8 +35,7 @@ echo "Compiling ${OUT_BIN} ..."
   "${BLD}/algebra/CMakeFiles/algebra.dir/crt.cc.o" \
   "${BLD}/util/CMakeFiles/util.dir/log.cc.o" \
   "${BLD}/util/CMakeFiles/util.dir/crypto.cc.o" \
-  "${BLD}/circuits/sha/CMakeFiles/flatsha.dir/flatsha256_witness.cc.o" \
-  "${BLD}/circuits/sha/CMakeFiles/flatsha.dir/sha256_constants.cc.o" \
+  "${HASH_OBJS[@]}" \
   "${LINK_LIB_DIRS[@]}" -lcrypto -lzstd \
   -o "${OUT_BIN}"
 

@@ -10,10 +10,11 @@ into results/<stack>/plots/:
   local_vs_server_merkle_vs_flat_<stack>.pdf prover time vs k, one panel per n
   local_vs_server_revocation_cft.pdf         Rust vs Node, direct and link decrypt
 
-  python3 tools/plot.py [--results DIR]
+  python3 tools/plot.py [--results DIR] [--pq]
 
 --results moves the local runs and the PDFs; the recorded results are always
-read from results/.
+read from results/. --pq reads the post-quantum local runs (local-<N>cpu-pq/,
+revocation/local-pq/) and prefixes the PDF names with pq_.
 
 A figure is skipped when its local results are missing; a series is dropped
 when only its file is missing (e.g. no 12-CPU run).
@@ -34,6 +35,8 @@ import numpy as np
 RECORDED = Path(__file__).resolve().parents[1] / "results"
 # Local runs and the PDFs; --results overrides it.
 RESULTS = RECORDED
+# "-pq" with --pq: suffix of the local result folders.
+SUFFIX = ""
 # Figure stem suffix -> results/ folder.
 STACK_DIRS = {"zkfriendly": "zk-friendly", "standard": "standard", "revocation": "revocation"}
 
@@ -118,7 +121,7 @@ def save(fig, stem: str) -> None:
              fontsize=FONT_LEGEND, style="italic")
     out_dir = RESULTS / STACK_DIRS[stem.rsplit("_", 1)[1]] / "plots"
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf = out_dir / f"{stem}.pdf"
+    pdf = out_dir / f"{'pq_' if SUFFIX else ''}{stem}.pdf"
     fig.savefig(pdf, format="pdf")
     plt.close(fig)
     print(f"Wrote {pdf}")
@@ -238,8 +241,9 @@ def read_summary(path: Path) -> dict[int, list[tuple[int, float]]]:
 
 def revocation_cft() -> None:
     sources = {"server": RECORDED / "revocation" / "recorded",
-               "local": RESULTS / "revocation" / "local"}
-    labels = {"server": "Node.js (recorded)", "local": "Rust (local, native)"}
+               "local": RESULTS / "revocation" / f"local{SUFFIX}"}
+    labels = {"server": "Node.js (recorded)",
+              "local": f"Rust (local, native{', pq' if SUFFIX else ''})"}
     if not (sources["local"] / "direct-decrypt_summary.csv").is_file():
         return skipped("local_vs_server_cft_revocation")
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.6), sharey=True)
@@ -270,12 +274,18 @@ def revocation_cft() -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--results", type=Path, default=RESULTS, help="results root")
-    RESULTS = parser.parse_args().results.resolve()
+    parser.add_argument("--pq", action="store_true", help="plot the post-quantum local runs")
+    args = parser.parse_args()
+    RESULTS = args.results.resolve()
+    if args.pq:
+        SUFFIX = "-pq"
+        for env in ("local", "local12"):
+            ENVS[env]["label"] += ", pq"
     configure_mpl()
     for stack, name in (("zkfriendly", "zk-friendly"), ("standard", "standard")):
         root = RESULTS / name
-        envs = {"server": RECORDED / name / "server", "local": root / "local-2cpu",
-                "local12": root / "local-12cpu"}
+        envs = {"server": RECORDED / name / "server", "local": root / f"local-2cpu{SUFFIX}",
+                "local12": root / f"local-12cpu{SUFFIX}"}
         if stack == "standard":
             del envs["local12"]
         phases = (["witness", "prove", "verify"], ["Witness", "Prove (rapidsnark)", "Verify"]) \

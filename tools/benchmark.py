@@ -3,12 +3,17 @@
 
   1. Fetches the pinned downloads (tools/fetch.py) and builds the Docker images.
   2. Runs the standard (Longfellow, including ML-DSA-65) and zk-friendly
-     benchmarks in Docker with --cpus/--memory; results go to results/<stack>/local-<N>cpu/.
+     benchmarks in Docker with --cpus/--memory; results go to
+     results/<stack>/local-<N>cpu-pq/.
   3. Reruns the three zk-friendly prove benchmarks with --cpus-full, to show
-     how rapidsnark scales with cores (results/zk-friendly/local-<M>cpu/).
-  4. Runs the revocation CFT experiments natively (results/revocation/local/),
+     how rapidsnark scales with cores (results/zk-friendly/local-<M>cpu-pq/).
+  4. Runs the revocation CFT experiments natively (results/revocation/local-pq/),
      plus the MPC sweep when MP_SPDZ_PATH is set.
   5. Writes environment.json next to each result set, then runs tools/plot.py.
+
+By default everything is built with the pq Cargo feature (SHAKE256, ML-DSA-65)
+and the result folders end in -pq. --classical builds without it (SHA-256,
+Poseidon) and writes to the folders without the suffix.
 
   python3 tools/benchmark.py                      # everything, ~3.5 h on 2 CPUs
   python3 tools/benchmark.py --only zk-friendly --skip-build
@@ -52,7 +57,7 @@ PASS_ENV = (
 BENCHES = ("prove_verify", "prove_verify_no_cft", "prove_verify_revocation",
            "merkle_vs_flat", "communication_size")
 PROVE_BENCHES = BENCHES[:3]
-STANDARD_BENCHES = BENCHES + ("ml_dsa65",)
+STANDARD_BENCHES = BENCHES + ("ml_dsa65",)  # pq build only
 
 
 def run(cmd: list[str], **kwargs) -> int:
@@ -73,12 +78,14 @@ def parse_memory(text: str) -> int:
     return int(float(text[:-1]) * units[text[-1].lower()]) if text[-1].isalpha() else int(text)
 
 
-def build_images(stacks: list[str]) -> None:
+def build_images(stacks: list[str], features: list[str]) -> None:
     if "zk-friendly" in stacks and run([sys.executable, str(TOOLS / "fetch.py")]) != 0:
         sys.exit("fetch failed")
+    build_args = ["--build-arg", f"CARGO_FEATURES={' '.join(features)}"]
     for stack in stacks:
         dockerfile = ROOT / "crates" / stack / "Dockerfile"
-        if run(["docker", "build", "-t", IMAGES[stack], "-f", str(dockerfile), str(ROOT)]) != 0:
+        if run(["docker", "build", *build_args, "-t", IMAGES[stack], "-f", str(dockerfile),
+                str(ROOT)]) != 0:
             sys.exit(f"{stack} image build failed")
 
 
@@ -121,9 +128,9 @@ def docker_suite(stack: str, benches: tuple[str, ...], limits: list[str], dest: 
     return {f"{tag}:{b}": codes[b] == 0 and (dest / f"{b}.json").is_file() for b in benches}
 
 
-def revocation_native(dest: Path) -> dict[str, bool]:
+def revocation_native(dest: Path, features: list[str]) -> dict[str, bool]:
     """CFT experiments on the host; the CSVs go straight to `dest`."""
-    if run(["cargo", "build", "--release", "-p", "revocation"], cwd=ROOT) != 0:
+    if run(["cargo", "build", "--release", "-p", "revocation", *features], cwd=ROOT) != 0:
         return {"revocation/local:build": False}
     dest.mkdir(parents=True, exist_ok=True)
     for stale in dest.glob("*.csv"):
@@ -180,7 +187,11 @@ def main() -> None:
     parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS,
                         help="results root (default results/)")
     parser.add_argument("--no-plots", action="store_true")
+    parser.add_argument("--classical", action="store_true",
+                        help="build without the pq feature (SHA-256, Poseidon)")
     args = parser.parse_args()
+    features = ["--no-default-features"] if args.classical else []
+    suffix = "" if args.classical else "-pq"
 
     stacks = args.only or list(STACKS)
     results = args.results.resolve()
@@ -191,23 +202,23 @@ def main() -> None:
             sys.exit(f"Docker VM has less memory than --memory {args.memory}; "
                      f"raise it in Docker Desktop (Settings -> Resources).")
         if not args.skip_build:
-            build_images(docker_stacks)
+            build_images(docker_stacks, features)
 
     started = datetime.now(timezone.utc)
     limits = ["--cpus", args.cpus, "--memory", args.memory, "--memory-swap", args.memory]
     # Each result set: its folder and the codes of the benchmarks written there.
     runs: list[tuple[Path, dict[str, bool]]] = []
     for stack in docker_stacks:
-        dest = results / stack / f"local-{args.cpus}cpu"
-        benches = STANDARD_BENCHES if stack == "standard" else BENCHES
+        dest = results / stack / f"local-{args.cpus}cpu{suffix}"
+        benches = STANDARD_BENCHES if stack == "standard" and not args.classical else BENCHES
         runs.append((dest, docker_suite(stack, benches, limits, dest)))
     if "zk-friendly" in stacks and args.cpus_full != "0":
-        dest = results / "zk-friendly" / f"local-{args.cpus_full}cpu"
+        dest = results / "zk-friendly" / f"local-{args.cpus_full}cpu{suffix}"
         full = ["--cpus", args.cpus_full, *limits[2:]]
         runs.append((dest, docker_suite("zk-friendly", PROVE_BENCHES, full, dest)))
     if "revocation" in stacks:
-        dest = results / "revocation" / "local"
-        runs.append((dest, revocation_native(dest)))
+        dest = results / "revocation" / f"local{suffix}"
+        runs.append((dest, revocation_native(dest, features)))
 
     finished = datetime.now(timezone.utc)
     host = host_description()
@@ -217,14 +228,15 @@ def main() -> None:
             "started": started.isoformat(timespec="seconds"),
             "finished": finished.isoformat(timespec="seconds"),
             "limits": {"cpus": args.cpus, "cpusFull": args.cpus_full, "memory": args.memory},
+            "build": "classical" if args.classical else "pq",
             "succeeded": codes,
         }
         (dest / "environment.json").write_text(json.dumps(environment, indent=2) + "\n")
 
     codes = {k: ok for _, c in runs for k, ok in c.items()}
     if not args.no_plots:
-        codes["plots"] = run([sys.executable, str(TOOLS / "plot.py"),
-                              "--results", str(results)]) == 0
+        codes["plots"] = run([sys.executable, str(TOOLS / "plot.py"), "--results", str(results),
+                              *([] if args.classical else ["--pq"])]) == 0
 
     failed = [name for name, ok in codes.items() if not ok]
     print(f"\nResults: {results}  (logs in {WORK / 'logs'})")

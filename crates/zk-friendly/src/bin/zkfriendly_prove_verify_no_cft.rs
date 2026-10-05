@@ -25,7 +25,7 @@ use zk_friendly::credential::{
     BASE_NOW_MS, NUM_ATTRS,
 };
 use zk_friendly::groth16::{ProofBundle, VerifyingKey};
-use zk_friendly::hash::sha256_utf8_to_field;
+use zk_friendly::hash::utf8_to_field;
 use zk_friendly::paths;
 use zk_friendly::summary::{AvgMs, Meta, Results, StatsMs, TimingSummary};
 use zk_friendly::zk_common::{self, Groth16Spec, IterArgs, Toolchain};
@@ -97,18 +97,18 @@ impl Credential {
 
         let claim_names = LABELS.map(|label| claim_name(poseidon, label));
         let mut claim_values = [Fq::from(0u64); NUM_ATTRS];
-        claim_values[2] = sha256_utf8_to_field("Alice");
-        claim_values[3] = sha256_utf8_to_field("Doe");
+        claim_values[2] = utf8_to_field("Alice");
+        claim_values[3] = utf8_to_field("Doe");
         claim_values[4] = Fq::from(birth_date_ms);
         claim_values[5] = Fq::from(valid_from_ms);
         claim_values[6] = Fq::from(valid_until_ms);
-        claim_values[7] = sha256_utf8_to_field("Main Street");
+        claim_values[7] = utf8_to_field("Main Street");
         claim_values[8] = Fq::from(12u64);
         claim_values[9] = Fq::from(1000u64);
-        claim_values[10] = sha256_utf8_to_field("Lausanne");
-        claim_values[11] = sha256_utf8_to_field("VD");
-        claim_values[12] = sha256_utf8_to_field("CH");
-        claim_values[13] = sha256_utf8_to_field("VD");
+        claim_values[10] = utf8_to_field("Lausanne");
+        claim_values[11] = utf8_to_field("VD");
+        claim_values[12] = utf8_to_field("CH");
+        claim_values[13] = utf8_to_field("VD");
         claim_values[14] = hw_pub.x;
         claim_values[15] = hw_pub.y;
 

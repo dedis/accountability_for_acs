@@ -5,7 +5,7 @@ use ark_ec::CurveGroup;
 use rand::Rng;
 use serde::Serialize;
 
-use crate::hash::sha256_utf8_to_field;
+use crate::hash::utf8_to_field;
 use babyjub::curve::{base8, fr_to_fq, rand_scalar, Fq, Point, PointAffine};
 use babyjub::eddsa::{SecretKey, Signature};
 use babyjub::poseidon::Poseidon;
@@ -26,9 +26,9 @@ pub const fn days_ms(days: u64) -> u64 {
     days * MS_PER_DAY
 }
 
-/// `claimName = poseidon(sha256(label) mod p)`.
+/// `claimName = poseidon(H(label) mod p)`, `H` from [`crate::hash::utf8_to_field`].
 pub fn claim_name(poseidon: &Poseidon, label: &str) -> Fq {
-    poseidon.hash(&[sha256_utf8_to_field(label)])
+    poseidon.hash(&[utf8_to_field(label)])
 }
 
 /// The attribute labels the benchmark credential carries.
@@ -119,18 +119,18 @@ impl Credential {
         let mut claim_values = [Fq::from(0u64); NUM_ATTRS];
         claim_values[0] = id.x;
         claim_values[1] = id.y;
-        claim_values[2] = sha256_utf8_to_field("Alice");
-        claim_values[3] = sha256_utf8_to_field("Doe");
+        claim_values[2] = utf8_to_field("Alice");
+        claim_values[3] = utf8_to_field("Doe");
         claim_values[4] = Fq::from(birth_date_ms);
         claim_values[5] = Fq::from(valid_from_ms);
         claim_values[6] = Fq::from(valid_until_ms);
-        claim_values[7] = sha256_utf8_to_field("Main Street");
+        claim_values[7] = utf8_to_field("Main Street");
         claim_values[8] = Fq::from(12u64);
         claim_values[9] = Fq::from(1000u64);
-        claim_values[10] = sha256_utf8_to_field("Lausanne");
-        claim_values[11] = sha256_utf8_to_field("VD");
-        claim_values[12] = sha256_utf8_to_field("CH");
-        claim_values[13] = sha256_utf8_to_field("VD");
+        claim_values[10] = utf8_to_field("Lausanne");
+        claim_values[11] = utf8_to_field("VD");
+        claim_values[12] = utf8_to_field("CH");
+        claim_values[13] = utf8_to_field("VD");
 
         let commitment = flat_commitment(poseidon, &claim_names, &claim_values);
         let signature = issuer.sign_poseidon(poseidon, commitment, rng);

@@ -19,6 +19,7 @@
 #include <chrono>
 
 #include "benchmark/benchmark.h"
+#include "gtest/gtest.h"
 
 namespace proofs {
 namespace {
@@ -36,14 +37,14 @@ static void BM_AttrSigCombined_Flat(benchmark::State& state) {
   auto h = MakeAttrCommitmentExperimentHarnessP256("flat", n, k);
   for (auto _ : state) {
     const auto t_prove0 = std::chrono::steady_clock::now();
-    const bool proved = ProveAttrCommitmentExperimentP256(*h);
+    bool proved = ProveAttrCommitmentExperimentP256(*h);
     const int64_t prove_ns = SteadyNsSince(t_prove0);
     benchmark::DoNotOptimize(proved);
 
     auto pub = PublicInputsAttrCommitmentExperimentP256(*h);
 
     const auto t_verify0 = std::chrono::steady_clock::now();
-    const bool verified = VerifyAttrCommitmentExperimentP256(*h, *pub);
+    bool verified = VerifyAttrCommitmentExperimentP256(*h, *pub);
     const int64_t verify_ns = SteadyNsSince(t_verify0);
     benchmark::DoNotOptimize(verified);
 
@@ -58,14 +59,14 @@ static void BM_AttrSigCombined_Merkle(benchmark::State& state) {
   auto h = MakeAttrCommitmentExperimentHarnessP256("merkle", n, k);
   for (auto _ : state) {
     const auto t_prove0 = std::chrono::steady_clock::now();
-    const bool proved = ProveAttrCommitmentExperimentP256(*h);
+    bool proved = ProveAttrCommitmentExperimentP256(*h);
     const int64_t prove_ns = SteadyNsSince(t_prove0);
     benchmark::DoNotOptimize(proved);
 
     auto pub = PublicInputsAttrCommitmentExperimentP256(*h);
 
     const auto t_verify0 = std::chrono::steady_clock::now();
-    const bool verified = VerifyAttrCommitmentExperimentP256(*h, *pub);
+    bool verified = VerifyAttrCommitmentExperimentP256(*h, *pub);
     const int64_t verify_ns = SteadyNsSince(t_verify0);
     benchmark::DoNotOptimize(verified);
 
@@ -148,4 +149,19 @@ static const bool kRegistered = []() {
 }();
 
 }  // namespace
+
+// Both commitments prove and verify, and fail once a public digest or root
+// bit changes.
+TEST(AttrCommitmentExperimentP256, ProvesAndVerifies) {
+  for (const char* mode : {"flat", "merkle"}) {
+    auto h = MakeAttrCommitmentExperimentHarnessP256(mode, 8, 2);
+    ASSERT_TRUE(ProveAttrCommitmentExperimentP256(*h)) << mode;
+    auto pub = PublicInputsAttrCommitmentExperimentP256(*h);
+    EXPECT_TRUE(VerifyAttrCommitmentExperimentP256(*h, *pub)) << mode;
+
+    pub->v_[1] = p256_base.of_scalar(2);
+    EXPECT_FALSE(VerifyAttrCommitmentExperimentP256(*h, *pub)) << mode;
+  }
+}
+
 }  // namespace proofs

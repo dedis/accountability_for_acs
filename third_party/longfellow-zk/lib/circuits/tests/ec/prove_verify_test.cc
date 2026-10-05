@@ -20,6 +20,7 @@
 #include <chrono>
 
 #include "benchmark/benchmark.h"
+#include "gtest/gtest.h"
 
 namespace proofs {
 namespace {
@@ -39,6 +40,18 @@ void RebuildCredentialUntimed(CredentialCommitmentProveVerifyHarnessP256& h,
 
 }  // namespace
 
+// The proof verifies, and fails once a public input changes.
+TEST(CredentialCommitmentProveVerifyP256, ProvesAndVerifies) {
+  auto h = MakeCredentialCommitmentProveVerifyHarnessP256(1);
+  RebuildBenchmarkCredentialP256(*h);
+  ASSERT_TRUE(ProveVerifyP256(*h));
+  auto pub = PublicInputsProveVerifyP256(*h);
+  EXPECT_TRUE(VerifyProveVerifyP256(*h, *pub));
+
+  pub->v_[kProveVerifyPubIdxT] = p256_base.one();
+  EXPECT_FALSE(VerifyProveVerifyP256(*h, *pub));
+}
+
 // Default: one pass per repetition; prove and verify wall times exported as counters.
 // prove_ns = refresh_show_inputs() + fill_input() + Ligero (per-show native prep + ZK).
 static void BM_CredentialCommitmentProveVerifyCombined_P256(benchmark::State& state) {
@@ -46,14 +59,14 @@ static void BM_CredentialCommitmentProveVerifyCombined_P256(benchmark::State& st
   for (auto _ : state) {
     const auto t_prove0 = std::chrono::steady_clock::now();
     RebuildBenchmarkCredentialP256(*h);
-    const bool proved = ProveVerifyP256(*h);
+    bool proved = ProveVerifyP256(*h);
     const int64_t prove_ns = SteadyNsSince(t_prove0);
     benchmark::DoNotOptimize(proved);
 
     auto pub = PublicInputsProveVerifyP256(*h);
 
     const auto t_verify0 = std::chrono::steady_clock::now();
-    const bool verified = VerifyProveVerifyP256(*h, *pub);
+    bool verified = VerifyProveVerifyP256(*h, *pub);
     const int64_t verify_ns = SteadyNsSince(t_verify0);
     benchmark::DoNotOptimize(verified);
 

@@ -70,10 +70,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY .work/downloads/ ./.work/downloads/
 
+# CARGO_FEATURES: empty for the default post-quantum (pq) build;
+# --build-arg CARGO_FEATURES=--no-default-features builds the classical one.
+ARG CARGO_FEATURES=""
 RUN test -f .work/downloads/ppot_0080_19.ptau \
  && test -d .work/downloads/circomlib/circuits \
- && cargo build --release --locked -p zk-friendly \
- && cargo test --release --locked -p zk-friendly \
+ && cargo build --release --locked -p zk-friendly $CARGO_FEATURES \
+ && cargo test --release --locked -p zk-friendly $CARGO_FEATURES \
  && command -v circom \
  && command -v prover \
  && command -v snarkjs

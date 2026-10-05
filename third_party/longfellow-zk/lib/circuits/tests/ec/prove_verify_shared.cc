@@ -35,8 +35,12 @@
 #include "circuits/logic/bit_plucker_encoder.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#ifdef PROOFS_EC_SHAKE256
+#include "circuits/tests/ec/shake256_hash.h"
+#else
 #include "circuits/sha/flatsha256_circuit.h"
 #include "circuits/sha/flatsha256_witness.h"
+#endif
 #include "random/secure_random_engine.h"
 #include "random/transcript.h"
 #include "util/crypto.h"
@@ -81,6 +85,13 @@ static void to_bytes_be(const Field& f, const typename Field::Elt& x,
   uint8_t tmp[32];
   f.to_bytes_field(tmp, x);
   for (size_t i = 0; i < 32; ++i) out[i] = tmp[31 - i];
+}
+
+template <class Field>
+static typename Field::Elt of_bytes_be(const Field& f, const uint8_t be[32]) {
+  uint8_t le[32];
+  for (size_t i = 0; i < 32; ++i) le[i] = be[31 - i];
+  return f.of_bytes_field(le).value();
 }
 
 template <class Field>
@@ -194,9 +205,13 @@ class CredentialCommitmentProveVerifyCircuit {
   static constexpr size_t kShaPluckerBits = 3;
   static constexpr size_t kBits = EC::kBits;
 
+#ifdef PROOFS_EC_SHAKE256
+  using Hash = Shake256Hash<LogicCircuit>;
+#else
   using Flatsha =
       FlatSHA256Circuit<LogicCircuit, BitPlucker<LogicCircuit, kShaPluckerBits>>;
   using ShaBlockWitness = typename Flatsha::BlockWitness;
+#endif
   using v8 = typename LogicCircuit::v8;
   using v256 = typename LogicCircuit::v256;
 
@@ -228,6 +243,27 @@ class CredentialCommitmentProveVerifyCircuit {
     }
   };
 
+#ifdef PROOFS_EC_SHAKE256
+  // SHAKE256(t || r2Q.x || r2Q.y): the message bytes and the Keccak witnesses.
+  struct TagWitness {
+    v8 msg[kProveVerifyTagMsgBytes];
+    typename Hash::Witness hash;
+    void input(const LogicCircuit& lc) {
+      for (auto& b : msg) b = lc.template vinput<8>();
+      hash.input(lc, kProveVerifyTagMsgBytes);
+    }
+  };
+
+  // SHAKE256 over the 32 leaf digests.
+  struct CredentialShaWitness {
+    v8 msg[kProveVerifyCredentialMsgBytes];
+    typename Hash::Witness hash;
+    void input(const LogicCircuit& lc) {
+      for (auto& b : msg) b = lc.template vinput<8>();
+      hash.input(lc, kProveVerifyCredentialMsgBytes);
+    }
+  };
+#else
   struct TagWitness {
     v8 sha_in[64 * kProveVerifyTagShaBlocks];
     ShaBlockWitness sha_bw[kProveVerifyTagShaBlocks];
@@ -255,6 +291,7 @@ class CredentialCommitmentProveVerifyCircuit {
       }
     }
   };
+#endif
 
   struct Witness {
     typename Ecdsa::Witness issuer_sig;
@@ -272,7 +309,9 @@ class CredentialCommitmentProveVerifyCircuit {
 
     v8 attr_bytes[kNumAttrs][kDigestBytes];
     CredentialShaWitness credential_sha;
+#ifndef PROOFS_EC_SHAKE256
     v256 credential_digest_bits;
+#endif
 
     ScalarBits r1_bits;
     ScalarBits r2_bits;
@@ -302,7 +341,9 @@ class CredentialCommitmentProveVerifyCircuit {
         }
       }
       credential_sha.input(lc);
+#ifndef PROOFS_EC_SHAKE256
       credential_digest_bits = lc.template vinput<256>();
+#endif
 
       r1_bits.input(lc);
       r2_bits.input(lc);
@@ -379,6 +420,28 @@ class CredentialCommitmentProveVerifyCircuit {
     scalar_mul_sliced(r2QX, r2QY, r2QZ, elgamal_x, elgamal_y, w.r2_bits.bits,
                       w.r2Q);
 
+#ifdef PROOFS_EC_SHAKE256
+    Hash shake(lc_);
+    auto repack_be32_from_bytes = [&](const v8 be[32]) -> EltW {
+      EltW h = lc_.konst(0);
+      EltW base = lc_.konst(2);
+      for (size_t i = 0; i < 32; ++i) {
+        for (size_t j = 0; j < 8; ++j) {
+          auto t = lc_.mul(h, base);
+          auto bit = lc_.eval(be[i][7 - j]);
+          h = lc_.add(bit, t);
+        }
+      }
+      return h;
+    };
+
+    lc_.assert_eq(repack_be32_from_bytes(&w.tag.msg[0]), w.t);
+    lc_.assert_eq(w.t, t_pub);
+    assert_equal_projective(r2QX, r2QY, r2QZ, repack_be32_from_bytes(&w.tag.msg[32]),
+                            repack_be32_from_bytes(&w.tag.msg[64]), one);
+    EltW tag_digest = repack_be32_from_bytes(
+        shake.digest(w.tag.msg, kProveVerifyTagMsgBytes, w.tag.hash).data());
+#else
     Flatsha sha_tag(lc_);
     const auto nb_tag = lc_.template vbit<8>(kProveVerifyTagShaBlocks);
     sha_tag.assert_message(kProveVerifyTagShaBlocks, nb_tag, w.tag.sha_in, w.tag.sha_bw);
@@ -412,6 +475,7 @@ class CredentialCommitmentProveVerifyCircuit {
 
     EltW tag_digest =
         repack32(sha_tag, w.tag.sha_bw[kProveVerifyTagShaBlocks - 1].h1);
+#endif
 
     Ecdsa c4_verifier(lc_, ec_, order_);
     c4_verifier.verify_signature3(w.id_x, w.id_y, tag_digest, w.c4_sig);
@@ -419,6 +483,7 @@ class CredentialCommitmentProveVerifyCircuit {
     lc_.assert_eq(w.c4_sig.ry, c4_ry_pub);
     lc_.assert_eq(lc_.mul(c4_s_pub, w.c4_sig.s_inv), one);
 
+#ifndef PROOFS_EC_SHAKE256
     Flatsha sha(lc_);
 
     auto repack_be32_from_bytes = [&](const v8 be[32]) -> EltW {
@@ -433,6 +498,7 @@ class CredentialCommitmentProveVerifyCircuit {
       }
       return h;
     };
+#endif
 
     auto bits_to_elt = [&](const EltW bits[kProveVerifyTsBits]) -> EltW {
       EltW acc = lc_.konst(0);
@@ -455,12 +521,19 @@ class CredentialCommitmentProveVerifyCircuit {
     lc_.assert_eq(now_val, now_pub);
     lc_.assert_eq(max_birth_val, max_birth_pub);
 
+#ifdef PROOFS_EC_SHAKE256
+    // SHAKE256 over 32 Merkle-style leaf digests (each SHAKE256(be32(i)||attr_i)).
+    EltW digest_field = repack_be32_from_bytes(
+        shake.digest(w.credential_sha.msg, kProveVerifyCredentialMsgBytes,
+                     w.credential_sha.hash).data());
+#else
     // Flat SHA-256 over 32 Merkle-style leaf digests (each SHA256(be32(i)||attr_i)).
     sha.assert_message_hash(kProveVerifyCredentialShaBlocks, w.credential_sha.nb,
                             w.credential_sha.sha_in, w.credential_digest_bits,
                             w.credential_sha.sha_bw);
     EltW digest_field = repack32(
         sha, w.credential_sha.sha_bw[kProveVerifyCredentialShaBlocks - 1].h1);
+#endif
 
     lc_.assert_eq(repack_be32_from_bytes(w.attr_bytes[0]), w.id_x);
     lc_.assert_eq(repack_be32_from_bytes(w.attr_bytes[1]), w.id_y);
@@ -490,6 +563,7 @@ class CredentialCommitmentProveVerifyCircuit {
   }
 
  private:
+#ifndef PROOFS_EC_SHAKE256
   EltW repack32(const Flatsha& sha,
                 const typename Flatsha::packed_v32 H[8]) const {
     EltW h = lc_.konst(0);
@@ -503,6 +577,7 @@ class CredentialCommitmentProveVerifyCircuit {
     }
     return h;
   }
+#endif
 
   void addE(EltW& X3, EltW& Y3, EltW& Z3, EltW X1, EltW Y1, EltW Z1, EltW X2,
             EltW Y2, EltW Z2) const {
@@ -644,10 +719,15 @@ struct BenchmarkContext {
 
   std::array<std::array<uint8_t, 32>, kProveVerifyCredentialAttrs> attr_values{};
   typename Field::Elt credential_digest_pub{};
+#ifdef PROOFS_EC_SHAKE256
+  std::array<uint8_t, kProveVerifyCredentialMsgBytes> credential_msg{};
+  Shake256Native credential_hash;
+#else
   std::array<uint8_t, 32> credential_digest_be{};
   std::array<uint8_t, 64 * kProveVerifyCredentialShaBlocks> credential_sha_in{};
   std::array<FlatSHA256Witness::BlockWitness, kProveVerifyCredentialShaBlocks>
       credential_sha_bw{};
+#endif
 
   typename Field::Elt id_x;
   typename Field::Elt id_y;
@@ -657,8 +737,13 @@ struct BenchmarkContext {
   std::array<typename Field::Elt, kProveVerifyTsBits> now_bits{};
   std::array<typename Field::Elt, kProveVerifyTsBits> max_birth_bits{};
 
+#ifdef PROOFS_EC_SHAKE256
+  std::array<uint8_t, kProveVerifyTagMsgBytes> tag_msg{};
+  Shake256Native tag_hash;
+#else
   std::array<uint8_t, 64 * kProveVerifyTagShaBlocks> tag_sha_in{};
   std::array<FlatSHA256Witness::BlockWitness, kProveVerifyTagShaBlocks> tag_sha_bw{};
+#endif
 
   std::array<typename Field::Elt, EC::kBits> r1_bits{};
   std::array<typename Field::Elt, EC::kBits> r2_bits{};
@@ -761,11 +846,13 @@ struct BenchmarkContext {
       std::memcpy(attr_values[i].data(), &attr_msg[i * 32], 32);
     }
 
+#ifndef PROOFS_EC_SHAKE256
     auto sha256_64_digest = [](const uint8_t msg64[64], uint8_t out[32]) {
       SHA256 sha;
       sha.Update(msg64, 64);
       sha.DigestData(out);
     };
+#endif
     auto be32_index = [](uint8_t out[32], uint8_t idx) {
       std::memset(out, 0, 32);
       out[31] = idx;
@@ -777,9 +864,19 @@ struct BenchmarkContext {
       uint8_t msg64[64];
       std::memcpy(msg64, name_be, 32);
       std::memcpy(msg64 + 32, attr_values[i].data(), 32);
+#ifdef PROOFS_EC_SHAKE256
+      const auto leaf = shake256(msg64, 64);
+      std::memcpy(&leaf_msg[i * 32], leaf.data(), 32);
+#else
       sha256_64_digest(msg64, &leaf_msg[i * 32]);
+#endif
     }
 
+#ifdef PROOFS_EC_SHAKE256
+    credential_msg = leaf_msg;
+    credential_hash.compute(credential_msg.data(), credential_msg.size());
+    credential_digest_pub = of_bytes_be(field, credential_hash.digest.data());
+#else
     uint8_t cred_nb = 0;
     FlatSHA256Witness::transform_and_witness_message(
         kProveVerifyCredentialMsgBytes, leaf_msg.data(),
@@ -797,6 +894,7 @@ struct BenchmarkContext {
         credential_digest_be[4 * j + 3] = static_cast<uint8_t>(w);
       }
     }
+#endif
 
     auto fill_bits_from_u64 = [&](std::array<typename Field::Elt, kProveVerifyTsBits>& out,
                                  uint64_t x) {
@@ -877,7 +975,9 @@ struct BenchmarkContext {
     c3x = c3.x;
     c3y = c3.y;
 
+#ifndef PROOFS_EC_SHAKE256
     std::array<uint8_t, kProveVerifyTagMsgBytes> tag_msg{};
+#endif
     {
       uint8_t buf[32];
       to_bytes_be(field, t_pub, buf);
@@ -888,12 +988,17 @@ struct BenchmarkContext {
       std::memcpy(&tag_msg[2 * 32], buf, 32);
     }
 
+#ifdef PROOFS_EC_SHAKE256
+    tag_hash.compute(tag_msg.data(), tag_msg.size());
+    const typename Field::Elt tag_digest_pub = of_bytes_be(field, tag_hash.digest.data());
+#else
     uint8_t tag_nb = 0;
     FlatSHA256Witness::transform_and_witness_message(
         tag_msg.size(), tag_msg.data(), kProveVerifyTagShaBlocks, tag_nb,
         tag_sha_in.data(), tag_sha_bw.data());
     const typename Field::Elt tag_digest_pub =
         sha_state_to_field(field, tag_sha_bw[kProveVerifyTagShaBlocks - 1].h1);
+#endif
 
     {
       uint8_t e_be[32];
@@ -936,7 +1041,6 @@ std::unique_ptr<Circuit<typename Traits::Field>> make_circuit(size_t numInstance
   using CompilerBackendType = CompilerBackend<Field>;
   using LogicCircuit = Logic<Field, CompilerBackendType>;
   using EltW = typename LogicCircuit::EltW;
-  using v256 = typename LogicCircuit::v256;
   using CircuitT = CredentialCommitmentProveVerifyCircuit<LogicCircuit, Field, EC>;
 
   QuadCircuit<Field> Q(Traits::field());
@@ -1017,7 +1121,9 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
 
   if (!prover) return;
 
+#ifndef PROOFS_EC_SHAKE256
   BitPluckerEncoder<Field, 3> enc(Traits::field());
+#endif
 
   auto push_sig = [&](const auto& src) {
     filler.push_back(src.rx_);
@@ -1053,6 +1159,10 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
     }
   }
 
+#ifdef PROOFS_EC_SHAKE256
+  for (uint8_t b : ctx.credential_msg) filler.push_back(b, 8, Traits::field());
+  ctx.credential_hash.push(filler, Traits::field());
+#else
   filler.push_back(static_cast<uint8_t>(kProveVerifyCredentialShaBlocks), 8, Traits::field());
   for (size_t i = 0; i < 64 * kProveVerifyCredentialShaBlocks; ++i) {
     filler.push_back(ctx.credential_sha_in[i], 8, Traits::field());
@@ -1075,6 +1185,7 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
     const uint8_t bit = (byte >> (j % 8)) & 1;
     filler.push_back(bit ? Traits::field().one() : Traits::field().zero());
   }
+#endif
 
   for (size_t i = 0; i < EC::kBits; ++i) filler.push_back(ctx.r1_bits[i]);
   for (size_t i = 0; i < EC::kBits; ++i) filler.push_back(ctx.r2_bits[i]);
@@ -1091,6 +1202,10 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
   push_mul_trace(ctx.wit_r1Q);
   push_mul_trace(ctx.wit_r2Q);
 
+#ifdef PROOFS_EC_SHAKE256
+  for (uint8_t b : ctx.tag_msg) filler.push_back(b, 8, Traits::field());
+  ctx.tag_hash.push(filler, Traits::field());
+#else
   for (size_t i = 0; i < 64 * kProveVerifyTagShaBlocks; ++i) {
     filler.push_back(ctx.tag_sha_in[i], 8, Traits::field());
   }
@@ -1102,6 +1217,7 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
     }
     for (size_t k = 0; k < 8; ++k) filler.push_back(enc.mkpacked_v32(ctx.tag_sha_bw[b].h1[k]));
   }
+#endif
 
   if (filler.size() != W.n1_) {
     log(ERROR, "fill_input size mismatch: filled=%zu expected=%zu", filler.size(),

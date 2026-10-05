@@ -12,13 +12,19 @@ cmake -S third_party/longfellow-zk/lib -B .work/standard/longfellow-build \
 cmake --build .work/standard/longfellow-build -j 8 --target \
   prove_verify_test prove_verify_no_cft_test \
   attr_commitment_experiment_test prove_verify_revocation_test \
+  prove_verify_pq_test prove_verify_no_cft_pq_test \
+  attr_commitment_experiment_pq_test prove_verify_revocation_pq_test \
   ml_dsa_65_zk_test
 cargo build --release -p standard
 ```
 
-The `pq` feature (on by default) adds `standard_ml_dsa65` and needs the
-`ml_dsa_65_zk_test` target. Without it, skip that target and build with
-`--no-default-features`:
+The `pq` feature (on by default) runs the `*_pq_test` binaries, which use
+SHAKE256 (32-byte output) in place of SHA-256 inside the circuits and for the
+native witnesses (`third_party/longfellow-zk/lib/circuits/tests/ec/shake256_hash.h`,
+compile definition `PROOFS_EC_SHAKE256`), and adds `standard_ml_dsa65`. Each
+benchmark binary also contains a test that the proof verifies and fails after a
+change to a public input: run it without arguments. Without `pq`, only the
+classical `*_test` targets are needed:
 
 ```bash
 cargo build --release -p standard --no-default-features
@@ -56,6 +62,7 @@ also reads its environment variable:
 | `TOTAL_ATTRS` | `--total-attrs` / `--attr` | `8,16,32,64` | merkle-vs-flat: credential sizes \(n\) |
 | `USED_ATTRS` | `--used-attrs` / `--used-attr` | `1,2,4,8,16` | merkle-vs-flat: disclosed counts \(k\) (skipped when \(k>n\)) |
 | `LONGFELLOW_BUILD_DIR` | — | `.work/standard/longfellow-build` | Longfellow CMake build |
+| `LONGFELLOW_HASH` | — | set by `standard_communication_size` | `measure/` scripts: `sha256` (classical targets) or `shake256` (`*_pq_test`) |
 | `LONGFELLOW_*_BENCH_BIN` | `--bin` | build path | Benchmark binary |
 | `BENCH_WORK_DIR` | — | `.work` | Scratch root |
 

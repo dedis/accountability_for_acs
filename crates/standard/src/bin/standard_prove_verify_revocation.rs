@@ -1,5 +1,5 @@
-//! Longfellow: age-check + CFT + packed status-list revocation (SHA-256
-//! Merkle), swept over population scales.
+//! Longfellow: age-check + CFT + packed status-list revocation (Merkle tree of
+//! [`standard::HASH`]), swept over population scales.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use standard::cli::Common;
 use standard::paths;
 use standard::runner::{self, Gbench};
 
-const TEST_NAME: &str = "circuits/tests/ec/prove_verify_revocation_test";
+const TEST_NAME: &str = standard::ec_bench!("prove_verify_revocation");
 const BITS_PER_LEAF: u32 = 253;
 
 #[derive(Parser)]
@@ -78,7 +78,7 @@ struct RevocationSummary {
     by_scale: Vec<ScaleResult>,
 }
 
-/// Packed SHA-256 status-list Merkle depth for a population of `2^revoc_log2`.
+/// Packed status-list Merkle depth for a population of `2^revoc_log2`.
 fn packed_merkle_depth(revoc_log2: u32) -> u32 {
     (1u64 << revoc_log2)
         .div_ceil(u64::from(BITS_PER_LEAF))
@@ -109,7 +109,10 @@ fn main() -> Result<()> {
         )
     });
 
-    println!("Longfellow ProveVerify+CFT+packed revocation (SHA-256 Merkle)");
+    println!(
+        "Longfellow ProveVerify+CFT+packed revocation ({} Merkle)",
+        standard::HASH
+    );
     println!(
         "  scales: {}",
         args.revoc_log2

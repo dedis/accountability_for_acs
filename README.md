@@ -41,12 +41,15 @@ python3 tools/fetch.py                           # ptau + circomlib into .work/d
 python3 tools/benchmark.py                       # every benchmark in Docker, then the plots
 ```
 
-The default build includes the post-quantum benchmarks (`pq` feature of
-`standard`: ML-DSA-65). `cargo build-classical` builds the classical
-benchmarks only.
+The default build is post-quantum (`pq` feature of `standard`, `revocation`
+and `zk-friendly`): SHAKE256 replaces SHA-256 and the native Poseidon hashes,
+and `standard` adds the ML-DSA-65 benchmark. `cargo build-classical` builds the
+classical version. `PQ_MIGRATION.md` tracks the migration.
 
 `tools/benchmark.py --help` lists its options (`--only`, `--cpus`,
-`--cpus-full`, `--memory`, `--skip-build`). Each crate's README covers running
+`--cpus-full`, `--memory`, `--skip-build`, `--classical`). Post-quantum
+results go to `-pq` folders (`results/<stack>/local-<N>cpu-pq/`); `--classical`
+writes to the folders without the suffix. Each crate's README covers running
 its benchmarks directly.
 
 ## Conventions
@@ -58,7 +61,8 @@ its benchmarks directly.
 - **Scratch space**: everything a run creates lives under `.work/` (move it with
   `BENCH_WORK_DIR`). Deleting it only costs rebuilds and re-downloads.
 - **Results**: `results/<stack>/<env>/<benchmark>.json`, with env `server` and
-  `mobile` (recorded), `local-<N>cpu` (written by `tools/benchmark.py`),
+  `mobile` (recorded), `local-<N>cpu` and `local-<N>cpu-pq` (written by
+  `tools/benchmark.py`),
   `sizes` (proof-size reports). See `results/README.md`.
 
 ## Comparing with the recorded results

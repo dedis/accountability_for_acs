@@ -1,4 +1,4 @@
-//! Longfellow: flat SHA versus Merkle attribute commitment, swept over
+//! Longfellow: flat hash versus Merkle attribute commitment, swept over
 //! credential size `n` and disclosure count `k`.
 //!
 //! The binary reports `prove_ns` / `verify_ns` counters on `Combined` rows.
@@ -22,7 +22,7 @@ use standard::gbench::{self, Row};
 use standard::paths;
 use standard::runner::{self, Gbench};
 
-const TEST_NAME: &str = "circuits/tests/ec/attr_commitment_experiment_test";
+const TEST_NAME: &str = standard::ec_bench!("attr_commitment_experiment");
 
 #[derive(Parser)]
 #[command(about = "Longfellow Merkle versus flat attribute commitment sweep")]
@@ -327,7 +327,10 @@ fn main() -> Result<()> {
     });
 
     if !common.compact {
-        println!("Backend: Longfellow (P-256 + SHA) - {TEST_NAME}");
+        println!(
+            "Backend: Longfellow (P-256 + {}) - {TEST_NAME}",
+            standard::HASH
+        );
         println!(
             "Repetitions (outer samples): {}  (BENCH_N; --repetitions / --n)",
             common.repetitions

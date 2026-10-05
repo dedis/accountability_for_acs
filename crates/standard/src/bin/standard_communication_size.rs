@@ -16,6 +16,13 @@ use bench_core::cli::Out;
 use bench_core::report;
 use standard::paths;
 
+/// Which measure targets the scripts build (`LONGFELLOW_HASH`).
+#[cfg(not(feature = "pq"))]
+const LONGFELLOW_HASH: &str = "sha256";
+/// Which measure targets the scripts build (`LONGFELLOW_HASH`).
+#[cfg(feature = "pq")]
+const LONGFELLOW_HASH: &str = "shake256";
+
 /// Packed depth for a population of 2^29 at 253 bits per leaf.
 const DEPTH_AT_2_29: f64 = 22.0;
 
@@ -171,6 +178,7 @@ fn run_measure<T: for<'de> Deserialize<'de>>(
         .arg(&script_path)
         .env("LONGFELLOW_LIB", paths::longfellow().join("lib"))
         .env("LONGFELLOW_BUILD_DIR", paths::build_dir())
+        .env("LONGFELLOW_HASH", LONGFELLOW_HASH)
         .env("MEASURE_JSON_OUT", json_out)
         .env("REVOC_LOG2_LIST", scales)
         .status()

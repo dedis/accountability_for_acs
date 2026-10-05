@@ -7,7 +7,7 @@
 #
 # Binaries: standard_prove_verify | standard_prove_verify_no_cft
 #         | standard_prove_verify_revocation | standard_merkle_vs_flat
-#         | standard_communication_size
+#         | standard_communication_size | standard_ml_dsa65 (pq)
 #
 FROM rust:1-bookworm
 
@@ -31,10 +31,16 @@ RUN cmake -S third_party/longfellow-zk/lib -B .work/standard/longfellow-build \
  && cmake --build .work/standard/longfellow-build -j"$(nproc)" \
       --target prove_verify_test prove_verify_no_cft_test \
                attr_commitment_experiment_test prove_verify_revocation_test \
+               prove_verify_pq_test prove_verify_no_cft_pq_test \
+               attr_commitment_experiment_pq_test prove_verify_revocation_pq_test \
                ml_dsa_65_zk_test
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
-RUN cargo build --release --locked -p standard && cargo test --release --locked -p standard
+# CARGO_FEATURES: empty for the default post-quantum (pq) build;
+# --build-arg CARGO_FEATURES=--no-default-features builds the classical one.
+ARG CARGO_FEATURES=""
+RUN cargo build --release --locked -p standard $CARGO_FEATURES \
+ && cargo test --release --locked -p standard $CARGO_FEATURES
 
 CMD ["bash"]

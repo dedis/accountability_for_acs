@@ -21,7 +21,9 @@
 #include <memory>
 #include <string_view>
 
+#ifndef PROOFS_EC_SHAKE256
 #include <openssl/sha.h>
+#endif
 
 #include "algebra/convolution.h"
 #include "algebra/fp.h"
@@ -33,8 +35,12 @@
 #include "circuits/logic/bit_plucker_encoder.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#ifdef PROOFS_EC_SHAKE256
+#include "circuits/tests/ec/shake256_hash.h"
+#else
 #include "circuits/sha/flatsha256_circuit.h"
 #include "circuits/sha/flatsha256_witness.h"
+#endif
 #include "random/secure_random_engine.h"
 #include "random/transcript.h"
 #include "util/log.h"
@@ -57,7 +63,9 @@ using v256 = LogicCircuit::v256;
 constexpr size_t kRate = 7;
 constexpr size_t kQueries = 132;
 constexpr size_t kAttrBytes = 32;
+#ifndef PROOFS_EC_SHAKE256
 constexpr size_t kShaPluckerBits = 3;
+#endif
 
 // Root of unity for the f_p256^2 extension field (same as credential benchmark).
 static constexpr char kP256ExtRootX[] =
@@ -68,11 +76,17 @@ static constexpr char kP256ExtRootY[] =
     "12908";
 constexpr uint64_t kP256ExtRootOrder = 1ull << 31;
 
-static void sha256_bytes(const uint8_t* msg, size_t len, uint8_t out[32]) {
+// SHA-256, or SHAKE256 with a 32-byte output with PROOFS_EC_SHAKE256.
+static void hash_bytes(const uint8_t* msg, size_t len, uint8_t out[32]) {
+#ifdef PROOFS_EC_SHAKE256
+  const auto digest = shake256(msg, len);
+  std::memcpy(out, digest.data(), 32);
+#else
   SHA256_CTX ctx;
   SHA256_Init(&ctx);
   SHA256_Update(&ctx, msg, len);
   SHA256_Final(out, &ctx);
+#endif
 }
 
 template <size_t N>
@@ -80,6 +94,7 @@ static void random_bytes(SecureRandomEngine& rng, std::array<uint8_t, N>& out) {
   rng.bytes(out.data(), N);
 }
 
+#ifndef PROOFS_EC_SHAKE256
 static constexpr size_t blocks_for_msg_bytes(size_t msg_bytes) {
   return (msg_bytes + 1 + 8 + 63) / 64;
 }
@@ -94,6 +109,7 @@ static void sha256_message_witness(
                                                    in.data(), bw.data());
   check(numb == NumBlocks, "sha witness: unexpected block count");
 }
+#endif
 
 // =============================================================================
 // Flat SHA commitment circuit:
@@ -101,6 +117,52 @@ static void sha256_message_witness(
 //   witness: padded message bytes + sha block witnesses
 // =============================================================================
 
+#ifdef PROOFS_EC_SHAKE256
+// SHAKE256 variant: public digest bytes; witness: message bytes + Keccak
+// witnesses.
+template <size_t NAttrs>
+struct FlatCtx {
+  static constexpr size_t kMsgBytes = NAttrs * kAttrBytes;
+  std::array<std::array<uint8_t, 32>, NAttrs> attrs{};
+  std::array<uint8_t, 32> digest{};
+  std::array<uint8_t, kMsgBytes> msg{};
+  Shake256Native hash;
+};
+
+template <size_t NAttrs>
+std::unique_ptr<Circuit<Field>> make_flat_circuit() {
+  QuadCircuit<Field> Q(p256_base);
+  const CompilerBackend<Field> cbk(&Q);
+  const LogicCircuit lc(&cbk, p256_base);
+  Shake256Hash<LogicCircuit> shake(lc);
+
+  std::array<v8, 32> digest_pub{};
+  for (auto& b : digest_pub) b = lc.template vinput<8>();
+
+  Q.private_input();
+
+  std::array<v8, FlatCtx<NAttrs>::kMsgBytes> msg{};
+  for (auto& b : msg) b = lc.template vinput<8>();
+  typename Shake256Hash<LogicCircuit>::Witness hw;
+  hw.input(lc, msg.size());
+
+  const auto digest = shake.digest(msg.data(), msg.size(), hw);
+  for (size_t i = 0; i < 32; ++i) lc.vassert_eq(digest[i], digest_pub[i]);
+
+  return Q.mkcircuit(1);
+}
+
+template <size_t NAttrs>
+static void fill_flat(Dense<Field>& W, const FlatCtx<NAttrs>& ctx, bool prover) {
+  DenseFiller<Field> f(W);
+  f.push_back(p256_base.one());
+  for (uint8_t b : ctx.digest) f.push_back(b, 8, p256_base);
+  if (!prover) return;
+  for (uint8_t b : ctx.msg) f.push_back(b, 8, p256_base);
+  ctx.hash.push(f, p256_base);
+  check(f.size() == W.n1_, "fill_flat: size mismatch");
+}
+#else
 template <size_t NAttrs>
 struct FlatCtx {
   static constexpr size_t kMsgBytes = NAttrs * kAttrBytes;
@@ -172,6 +234,7 @@ static void fill_flat(Dense<Field>& W, const FlatCtx<NAttrs>& ctx, bool prover) 
   while (f.size() < W.n1_) f.push_back(p256_base.zero());
   check(f.size() == W.n1_, "fill_flat: size mismatch");
 }
+#endif
 
 // =============================================================================
 // Merkle circuit:
@@ -181,6 +244,18 @@ static void fill_flat(Dense<Field>& W, const FlatCtx<NAttrs>& ctx, bool prover) 
 //   witness: for each of K claims: value bytes + path siblings + path bits + SHA witnesses
 // =============================================================================
 
+#ifdef PROOFS_EC_SHAKE256
+// SHAKE256 variant: leaf = SHAKE256(be32(index) || value_bytes),
+// internal = SHAKE256(left_digest || right_digest).
+template <size_t Depth>
+struct ClaimCtx {
+  std::array<uint8_t, 32> value_be{};
+  std::array<std::array<uint8_t, 32>, Depth> path_elements{};
+  std::array<Field::Elt, Depth> path_indices{};  // 0/1 in field
+  Shake256Native leaf_hash;
+  std::array<Shake256Native, Depth> node_hash{};
+};
+#else
 constexpr size_t kShaBlocks64 = 2;  // SHA256 over 64 bytes => 2 blocks with padding.
 
 template <size_t Depth>
@@ -191,6 +266,7 @@ struct ClaimCtx {
   std::array<FlatSHA256Witness::BlockWitness, 2> leaf_bw{};
   std::array<std::array<FlatSHA256Witness::BlockWitness, 2>, Depth> node_bw{};
 };
+#endif
 
 template <size_t NAttrs, size_t Depth, size_t K>
 struct MerkleCtx {
@@ -200,6 +276,89 @@ struct MerkleCtx {
   std::array<ClaimCtx<Depth>, K> claims{};
 };
 
+#ifdef PROOFS_EC_SHAKE256
+template <size_t NAttrs, size_t Depth, size_t K>
+std::unique_ptr<Circuit<Field>> make_merkle_circuit() {
+  using Hash = Shake256Hash<LogicCircuit>;
+  QuadCircuit<Field> Q(p256_base);
+  const CompilerBackend<Field> cbk(&Q);
+  const LogicCircuit lc(&cbk, p256_base);
+  Hash shake(lc);
+
+  std::array<v8, 32> root_pub{};
+  for (auto& b : root_pub) b = lc.template vinput<8>();
+
+  Q.private_input();
+
+  auto hash2_64bytes = [&](const std::array<v8, 32>& left,
+                           const std::array<v8, 32>& right,
+                           const typename Hash::Witness& hw) {
+    v8 in[64];
+    for (size_t i = 0; i < 32; ++i) in[i] = left[i];
+    for (size_t i = 0; i < 32; ++i) in[32 + i] = right[i];
+    return shake.digest(in, 64, hw);
+  };
+
+  auto be32_of_u8 = [&](uint8_t x) {
+    std::array<v8, 32> name{};
+    for (size_t i = 0; i < 31; ++i) name[i] = lc.template vbit<8>(0x00);
+    name[31] = lc.template vbit<8>(x);
+    return name;
+  };
+
+  for (size_t claim_i = 0; claim_i < K; ++claim_i) {
+    std::array<v8, 32> val{};
+    for (auto& b : val) b = lc.template vinput<8>();
+    std::array<std::array<v8, 32>, Depth> sib{};
+    std::array<EltW, Depth> path_idx{};
+    for (size_t d = 0; d < Depth; ++d) {
+      for (auto& b : sib[d]) b = lc.template vinput<8>();
+      path_idx[d] = lc.eltw_input();
+    }
+    typename Hash::Witness leaf_hw;
+    leaf_hw.input(lc, 64);
+    std::array<typename Hash::Witness, Depth> node_hw;
+    for (auto& hw : node_hw) hw.input(lc, 64);
+
+    std::array<v8, 32> cur =
+        hash2_64bytes(be32_of_u8(static_cast<uint8_t>(claim_i)), val, leaf_hw);
+    for (size_t d = 0; d < Depth; ++d) {
+      typename LogicCircuit::BitW bi(path_idx[d], lc.f_);
+      lc.assert_is_bit(bi);
+      std::array<v8, 32> left{}, right{};
+      for (size_t i = 0; i < 32; ++i) {
+        lc.vmux(bi, left[i], sib[d][i], cur[i]);
+        lc.vmux(bi, right[i], cur[i], sib[d][i]);
+      }
+      cur = hash2_64bytes(left, right, node_hw[d]);
+    }
+
+    for (size_t i = 0; i < 32; ++i) lc.vassert_eq(cur[i], root_pub[i]);
+  }
+
+  return Q.mkcircuit(1);
+}
+
+template <size_t NAttrs, size_t Depth, size_t K>
+static void fill_merkle(Dense<Field>& W, const MerkleCtx<NAttrs, Depth, K>& ctx,
+                        bool prover) {
+  DenseFiller<Field> f(W);
+  f.push_back(p256_base.one());
+  for (size_t i = 0; i < 32; ++i) f.push_back(ctx.root[i], 8, p256_base);
+  if (!prover) return;
+  for (size_t i = 0; i < K; ++i) {
+    const auto& c = ctx.claims[i];
+    for (size_t j = 0; j < 32; ++j) f.push_back(c.value_be[j], 8, p256_base);
+    for (size_t d = 0; d < Depth; ++d) {
+      for (size_t j = 0; j < 32; ++j) f.push_back(c.path_elements[d][j], 8, p256_base);
+      f.push_back(c.path_indices[d]);
+    }
+    c.leaf_hash.push(f, p256_base);
+    for (size_t d = 0; d < Depth; ++d) c.node_hash[d].push(f, p256_base);
+  }
+  check(f.size() == W.n1_, "fill_merkle: size mismatch");
+}
+#else
 template <size_t NAttrs, size_t Depth, size_t K>
 std::unique_ptr<Circuit<Field>> make_merkle_circuit() {
   using FlatSha =
@@ -327,6 +486,7 @@ static void fill_merkle(Dense<Field>& W, const MerkleCtx<NAttrs, Depth, K>& ctx,
   while (f.size() < W.n1_) f.push_back(p256_base.zero());
   check(f.size() == W.n1_, "fill_merkle: size mismatch");
 }
+#endif
 
 }  // namespace
 
@@ -407,7 +567,12 @@ class FlatHarness final : public AttrCommitmentExperimentHarnessP256 {
       random_bytes(rng_local, zk_.ctx.attrs[i]);
       std::memcpy(msg.data() + i * 32, zk_.ctx.attrs[i].data(), 32);
     }
-    sha256_bytes(msg.data(), msg.size(), zk_.ctx.digest.data());
+#ifdef PROOFS_EC_SHAKE256
+    zk_.ctx.msg = msg;
+    zk_.ctx.hash.compute(msg.data(), msg.size());
+    zk_.ctx.digest = zk_.ctx.hash.digest;
+#else
+    hash_bytes(msg.data(), msg.size(), zk_.ctx.digest.data());
     sha256_message_witness<FlatCtx<NAttrs>::kBlocks>(msg.data(), msg.size(),
                                                      zk_.ctx.sha_in, zk_.ctx.sha_bw);
 
@@ -422,6 +587,7 @@ class FlatHarness final : public AttrCommitmentExperimentHarnessP256 {
       want[4 * j + 3] = static_cast<uint8_t>(w);
     }
     check(want == zk_.ctx.digest, "sha witness digest mismatch");
+#endif
   }
 
   CommonZk<FlatCtx<NAttrs>> zk_;
@@ -456,6 +622,7 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
     out[31] = x;
   }
 
+#ifndef PROOFS_EC_SHAKE256
   static void sha256_witness_64(const uint8_t msg64[64],
                                std::array<FlatSHA256Witness::BlockWitness, 2>& out) {
     std::array<uint8_t, 128> tmp{};
@@ -478,6 +645,7 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
     }
     return out;
   }
+#endif
 
   void build_inputs() {
     SecureRandomEngine rng_local;
@@ -488,7 +656,7 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
       uint8_t msg64[64];
       be32_of_u8(msg64, static_cast<uint8_t>(i));
       std::memcpy(msg64 + 32, zk_.ctx.attrs[i].data(), 32);
-      sha256_bytes(msg64, 64, level[i].data());
+      hash_bytes(msg64, 64, level[i].data());
     }
 
     std::array<std::array<std::array<uint8_t, 32>, NAttrs>, Depth + 1> tree{};
@@ -499,7 +667,7 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
         uint8_t msg64[64];
         std::memcpy(msg64, tree[d][j].data(), 32);
         std::memcpy(msg64 + 32, tree[d][j + 1].data(), 32);
-        sha256_bytes(msg64, 64, tree[d + 1][j / 2].data());
+        hash_bytes(msg64, 64, tree[d + 1][j / 2].data());
       }
       width >>= 1;
     }
@@ -513,13 +681,17 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
       uint8_t leaf_msg64[64];
       be32_of_u8(leaf_msg64, static_cast<uint8_t>(idx));
       std::memcpy(leaf_msg64 + 32, c.value_be.data(), 32);
+#ifdef PROOFS_EC_SHAKE256
+      c.leaf_hash.compute(leaf_msg64, 64);
+#else
       sha256_witness_64(leaf_msg64, c.leaf_bw);
       {
         std::array<uint8_t, 32> want{};
-        sha256_bytes(leaf_msg64, 64, want.data());
+        hash_bytes(leaf_msg64, 64, want.data());
         const auto got = digest_bytes_from_bw(c.leaf_bw);
         check(got == want, "leaf bw digest bytes mismatch");
       }
+#endif
 
       for (size_t d = 0; d < Depth; ++d) {
         const size_t sibling = idx ^ 1;
@@ -532,13 +704,17 @@ class MerkleHarness final : public AttrCommitmentExperimentHarnessP256 {
         uint8_t msg64[64];
         std::memcpy(msg64, left.data(), 32);
         std::memcpy(msg64 + 32, right.data(), 32);
+#ifdef PROOFS_EC_SHAKE256
+        c.node_hash[d].compute(msg64, 64);
+#else
         sha256_witness_64(msg64, c.node_bw[d]);
         {
           std::array<uint8_t, 32> want{};
-          sha256_bytes(msg64, 64, want.data());
+          hash_bytes(msg64, 64, want.data());
           const auto got = digest_bytes_from_bw(c.node_bw[d]);
           check(got == want, "node bw digest bytes mismatch");
         }
+#endif
 
         idx >>= 1;
       }

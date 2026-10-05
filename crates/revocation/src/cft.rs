@@ -71,7 +71,8 @@ pub struct Batch {
 }
 
 /// Builds `n` CFTs, of which `recurring_pct` (at least the PID threshold) share
-/// one identity. `C4 = EdDSA(poseidon(t, D2))` under that identity's key.
+/// one identity. `C4 = EdDSA(H(t, D2))` under that identity's key (see
+/// [`crate::c4`]).
 /// Requires at least two CFTs and a recurring fraction in `0..=1`.
 pub fn build_batch<R: Rng + ?Sized>(
     poseidon: &Poseidon,

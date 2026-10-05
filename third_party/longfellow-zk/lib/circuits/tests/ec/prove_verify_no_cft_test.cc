@@ -19,6 +19,7 @@
 #include <chrono>
 
 #include "benchmark/benchmark.h"
+#include "gtest/gtest.h"
 
 namespace proofs {
 namespace {
@@ -38,19 +39,31 @@ void RebuildCredentialUntimed(CredentialCommitmentProveVerifyNoCftHarnessP256& h
 
 }  // namespace
 
+// The proof verifies, and fails once a public input changes.
+TEST(CredentialCommitmentProveVerifyNoCftP256, ProvesAndVerifies) {
+  auto h = MakeCredentialCommitmentProveVerifyNoCftHarnessP256(1);
+  RebuildBenchmarkCredentialNoCftP256(*h);
+  ASSERT_TRUE(ProveVerifyNoCftP256(*h));
+  auto pub = PublicInputsProveVerifyNoCftP256(*h);
+  EXPECT_TRUE(VerifyProveVerifyNoCftP256(*h, *pub));
+
+  pub->v_[kProveVerifyNoCftPubIdxNow] = p256_base.one();
+  EXPECT_FALSE(VerifyProveVerifyNoCftP256(*h, *pub));
+}
+
 static void BM_CredentialCommitmentProveVerifyNoCftCombined_P256(benchmark::State& state) {
   auto h = MakeCredentialCommitmentProveVerifyNoCftHarnessP256(state.range(0));
   for (auto _ : state) {
     const auto t_prove0 = std::chrono::steady_clock::now();
     RebuildBenchmarkCredentialNoCftP256(*h);
-    const bool proved = ProveVerifyNoCftP256(*h);
+    bool proved = ProveVerifyNoCftP256(*h);
     const int64_t prove_ns = SteadyNsSince(t_prove0);
     benchmark::DoNotOptimize(proved);
 
     auto pub = PublicInputsProveVerifyNoCftP256(*h);
 
     const auto t_verify0 = std::chrono::steady_clock::now();
-    const bool verified = VerifyProveVerifyNoCftP256(*h, *pub);
+    bool verified = VerifyProveVerifyNoCftP256(*h, *pub);
     const int64_t verify_ns = SteadyNsSince(t_verify0);
     benchmark::DoNotOptimize(verified);
 
