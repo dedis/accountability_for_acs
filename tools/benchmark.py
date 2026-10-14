@@ -2,8 +2,8 @@
 """Runs every benchmark, collects the results and draws the plots.
 
   1. Fetches the pinned downloads (tools/fetch.py) and builds the Docker images.
-  2. Runs the standard (Longfellow, including ML-DSA-65) and zk-friendly
-     benchmarks in Docker with --cpus/--memory; results go to
+  2. Runs the standard (Longfellow, including the signature proof) and
+     zk-friendly benchmarks in Docker with --cpus/--memory; results go to
      results/<stack>/local-<N>cpu-pq/.
   3. Reruns the three zk-friendly prove benchmarks with --cpus-full, to show
      how rapidsnark scales with cores (results/zk-friendly/local-<M>cpu-pq/).
@@ -12,8 +12,11 @@
   5. Writes environment.json next to each result set, then runs tools/plot.py.
 
 By default everything is built with the pq Cargo feature (SHAKE256, ML-DSA-65)
-and the result folders end in -pq. --classical builds without it (SHA-256,
-Poseidon) and writes to the folders without the suffix.
+and the result folders end in -pq. --algorithm and --nist-level pick the
+post-quantum signature (C4 in revocation, standard_signature), as in
+tools/build.py; a choice other than ml-dsa at level 3 appends it to the
+folders (e.g. -pq-slh-dsa-f-5). --classical builds without pq (SHA-256,
+Poseidon, EdDSA) and writes to the folders without the suffix.
 
   python3 tools/benchmark.py                      # everything, ~3.5 h on 2 CPUs
   python3 tools/benchmark.py --only zk-friendly --skip-build
@@ -37,6 +40,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import build  # tools/build.py: --algorithm / --nist-level to Cargo features
+
 ROOT = Path(__file__).resolve().parents[1]  # the workspace root
 TOOLS = ROOT / "tools"
 DEFAULT_RESULTS = ROOT / "results"
@@ -44,6 +49,8 @@ WORK = Path(os.environ.get("BENCH_WORK_DIR") or ROOT / ".work")
 
 STACKS = ("standard", "zk-friendly", "revocation")
 IMAGES = {"standard": "standard-bench-rs", "zk-friendly": "zk-friendly-bench-rs"}
+# Image label with the Cargo features of the build; --skip-build checks it.
+FEATURES_LABEL = "cargo-features"
 # Binary name prefix per stack.
 PREFIX = {"standard": "standard", "zk-friendly": "zkfriendly", "revocation": "revocation"}
 
@@ -57,7 +64,7 @@ PASS_ENV = (
 BENCHES = ("prove_verify", "prove_verify_no_cft", "prove_verify_revocation",
            "merkle_vs_flat", "communication_size")
 PROVE_BENCHES = BENCHES[:3]
-STANDARD_BENCHES = BENCHES + ("ml_dsa65",)  # pq build only
+STANDARD_BENCHES = BENCHES + ("signature",)  # pq build only
 
 
 def run(cmd: list[str], **kwargs) -> int:
@@ -81,12 +88,27 @@ def parse_memory(text: str) -> int:
 def build_images(stacks: list[str], features: list[str]) -> None:
     if "zk-friendly" in stacks and run([sys.executable, str(TOOLS / "fetch.py")]) != 0:
         sys.exit("fetch failed")
-    build_args = ["--build-arg", f"CARGO_FEATURES={' '.join(features)}"]
+    build_args = ["--build-arg", f"CARGO_FEATURES={' '.join(features)}",
+                  "--label", f"{FEATURES_LABEL}={' '.join(features)}"]
     for stack in stacks:
         dockerfile = ROOT / "crates" / stack / "Dockerfile"
         if run(["docker", "build", *build_args, "-t", IMAGES[stack], "-f", str(dockerfile),
                 str(ROOT)]) != 0:
             sys.exit(f"{stack} image build failed")
+
+
+def check_images(stacks: list[str], features: list[str]) -> None:
+    """Exits if an image to reuse was built with other Cargo features."""
+    want = " ".join(features)
+    for stack in stacks:
+        out = subprocess.run(
+            ["docker", "image", "inspect", "-f",
+             f'{{{{index .Config.Labels "{FEATURES_LABEL}"}}}}', IMAGES[stack]],
+            capture_output=True, text=True, check=False)
+        got = out.stdout.strip()
+        if out.returncode != 0 or got != want:
+            sys.exit(f"{IMAGES[stack]} was built with Cargo features '{got}', not "
+                     f"'{want}'; run without --skip-build.")
 
 
 def docker_suite(stack: str, benches: tuple[str, ...], limits: list[str], dest: Path,
@@ -189,9 +211,19 @@ def main() -> None:
     parser.add_argument("--no-plots", action="store_true")
     parser.add_argument("--classical", action="store_true",
                         help="build without the pq feature (SHA-256, Poseidon)")
+    build.add_arguments(parser)
     args = parser.parse_args()
-    features = ["--no-default-features"] if args.classical else []
+    default_signature = args.algorithm == "ml-dsa" and args.nist_level == "3"
+    if args.classical and not default_signature:
+        sys.exit("--algorithm and --nist-level apply to the pq build only")
+    chosen = build.features(args.algorithm, args.nist_level)
+    if args.classical:
+        features = ["--no-default-features"]
+    else:
+        features = ["--features", ",".join(chosen)]
     suffix = "" if args.classical else "-pq"
+    if not default_signature:
+        suffix += f"-{args.algorithm}-{args.nist_level}"
 
     stacks = args.only or list(STACKS)
     results = args.results.resolve()
@@ -201,7 +233,9 @@ def main() -> None:
         if docker_memory_bytes() < parse_memory(args.memory):
             sys.exit(f"Docker VM has less memory than --memory {args.memory}; "
                      f"raise it in Docker Desktop (Settings -> Resources).")
-        if not args.skip_build:
+        if args.skip_build:
+            check_images(docker_stacks, features)
+        else:
             build_images(docker_stacks, features)
 
     started = datetime.now(timezone.utc)
@@ -228,7 +262,8 @@ def main() -> None:
             "started": started.isoformat(timespec="seconds"),
             "finished": finished.isoformat(timespec="seconds"),
             "limits": {"cpus": args.cpus, "cpusFull": args.cpus_full, "memory": args.memory},
-            "build": "classical" if args.classical else "pq",
+            "build": "classical" if args.classical
+                     else f"pq ({args.algorithm}, level {args.nist_level})",
             "succeeded": codes,
         }
         (dest / "environment.json").write_text(json.dumps(environment, indent=2) + "\n")

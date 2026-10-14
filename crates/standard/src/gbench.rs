@@ -233,6 +233,9 @@ pub struct AvgMs {
     #[serde(rename = "proverTotal")]
     pub prover_total: Option<f64>,
     pub verify: Option<f64>,
+    /// Native signing, for the signature benchmark only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -242,6 +245,9 @@ pub struct StatsMs {
     pub verify: Option<SummaryMs>,
     #[serde(rename = "fullCycle")]
     pub full_cycle: Option<SummaryMs>,
+    /// Native signing, for the signature benchmark only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign: Option<SummaryMs>,
 }
 
 /// The zk-friendly-shaped timing summary, minus the witness/prove split.
@@ -267,11 +273,13 @@ pub fn build_timing_summary(rows: &[Row], meta: Meta) -> Option<TimingSummary> {
         avg_ms: AvgMs {
             prover_total: prover_total.map(|s| s.avg_ms),
             verify: verify.map(|s| s.avg_ms),
+            sign: None,
         },
         stats_ms: StatsMs {
             prover_total,
             verify,
             full_cycle: stats::summary_ms(&combined.full_cycle_ms(), P95::FloorNMinus1),
+            sign: None,
         },
         meta,
     })

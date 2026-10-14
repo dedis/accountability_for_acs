@@ -14,15 +14,28 @@ cmake --build .work/standard/longfellow-build -j 8 --target \
   attr_commitment_experiment_test prove_verify_revocation_test \
   prove_verify_pq_test prove_verify_no_cft_pq_test \
   attr_commitment_experiment_pq_test prove_verify_revocation_pq_test \
-  ml_dsa_65_zk_test
+  ml_dsa_65_zk_test ml_dsa_87_zk_test
 cargo build --release -p standard
 ```
+
+`standard_signature` with the `slh-dsa` feature needs the SLH-DSA copy of
+Longfellow:
+
+```bash
+cmake -S third_party/longfellow-zk-slh/lib -B .work/standard/longfellow-slh-build \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build .work/standard/longfellow-slh-build -j 8 \
+  --target slh_dsa_zk_test slh_dsa_zk_5_test
+```
+
+`slh_dsa_zk_test` proves the level-3 sets (192s, 192f) and `slh_dsa_zk_5_test`
+the level-5 sets (256s, 256f), built with 64-byte SHAKE256 digests.
 
 The `pq` feature (on by default) runs the `*_pq_test` binaries, which use
 SHAKE256 (48-byte output) in place of SHA-256 inside the circuits and for the
 native witnesses (`third_party/longfellow-zk/lib/circuits/tests/ec/shake256_hash.h`,
-compile definition `PROOFS_EC_SHAKE256`), and adds `standard_ml_dsa65`. These
-binaries and `ml_dsa_65_zk_test` also use SHAKE256 in the proof system: Merkle
+compile definition `PROOFS_EC_SHAKE256`), and adds `standard_signature`. These
+binaries and the signature benchmarks also use SHAKE256 in the proof system: Merkle
 commitments, Fiat-Shamir transcript, circuit ID, and a SHAKE256 PRF in place of
 AES-256 (`third_party/longfellow-zk/lib/util/crypto.h`, compile definition
 `PROOFS_SHAKE256`). Each
@@ -39,13 +52,23 @@ On macOS: `brew install googletest google-benchmark zstd`. On Debian/Ubuntu:
 
 ## Benchmarks
 
+`standard_signature` proves the verification of the signature chosen at
+compile time with `tools/build.py --algorithm --nist-level` (see the root
+README; features `slh-dsa`, `slh-dsa-f`, `level-5`): ML-DSA-65 (default),
+ML-DSA-87, or SLH-DSA-SHAKE-192s, 256s, 192f or 256f. Every proof
+has the soundness of its NIST category (192 bits at level 3, 256 bits at
+level 5). SLH-DSA needs 2.1 GB (192s), 4.5 GB (256s), 5.7 GB (192f) or
+8.9 GB (256f) of memory. Its summary also has the native signing time of
+the same scheme (`statsMs.sign`, `avgMs.sign`), measured with the C4 signer
+of `revocation` (fips204 / fips205) once per repetition.
+
 ```bash
 cargo run --release --bin standard_prove_verify
 cargo run --release --bin standard_prove_verify_no_cft
 cargo run --release --bin standard_prove_verify_revocation
 cargo run --release --bin standard_merkle_vs_flat
 cargo run --release --bin standard_communication_size
-cargo run --release --bin standard_ml_dsa65            # pq feature
+cargo run --release --bin standard_signature           # pq feature
 ```
 
 Each writes `summary.json` to `--out DIR` (default
@@ -66,6 +89,7 @@ also reads its environment variable:
 | `TOTAL_ATTRS` | `--total-attrs` / `--attr` | `8,16,32,64` | merkle-vs-flat: credential sizes \(n\) |
 | `USED_ATTRS` | `--used-attrs` / `--used-attr` | `1,2,4,8,16` | merkle-vs-flat: disclosed counts \(k\) (skipped when \(k>n\)) |
 | `LONGFELLOW_BUILD_DIR` | — | `.work/standard/longfellow-build` | Longfellow CMake build |
+| `LONGFELLOW_SLH_BUILD_DIR` | — | `.work/standard/longfellow-slh-build` | CMake build of the SLH-DSA copy |
 | `LONGFELLOW_HASH` | — | set by `standard_communication_size` | `measure/` scripts: `sha256` (classical targets) or `shake256` (`*_pq_test`) |
 | `LONGFELLOW_*_BENCH_BIN` | `--bin` | build path | Benchmark binary |
 | `BENCH_WORK_DIR` | — | `.work` | Scratch root |
@@ -76,7 +100,7 @@ does nothing; quiet output is the default.
 | Path | Role |
 |------|------|
 | `src/` | Google Benchmark runner and report parsing, the shared presentation driver |
-| `src/bin/` | The six benchmarks (`standard_ml_dsa65` needs the `pq` feature) |
+| `src/bin/` | The six benchmarks (`standard_signature` needs the `pq` feature) |
 | `measure/` | Proof-size programs (C++) and their build scripts, run by `standard_communication_size` |
 
 The merkle-vs-flat sweep needs more than 7 GB of memory at \(n = 64\).

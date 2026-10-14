@@ -1,3 +1,5 @@
 [alias]
 # Classical build: every benchmark except the post-quantum ones (`pq` feature).
-build-classical = "build --release --no-default-features"
+build-classical = "build --release --no-default-features --workspace"
+# Post-quantum builds with another signature: tools/build.py --algorithm
+# --nist-level.

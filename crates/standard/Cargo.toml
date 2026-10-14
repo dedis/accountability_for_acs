@@ -9,10 +9,21 @@ description = "Longfellow (Google Benchmark) prove-verify benchmarks for the cre
 
 [features]
 default = ["pq"]
-pq = []
+# The signature features are forwarded to revocation, whose signer
+# (revocation::pq_sig::Selected) standard_signature times.
+pq = ["dep:revocation", "revocation/pq"]
+# Signature scheme of standard_signature: ML-DSA by default, SLH-DSA (in
+# third_party/longfellow-zk-slh) with this feature.
+slh-dsa = ["pq", "revocation/slh-dsa"]
+# NIST security category of standard_signature: 3 by default, 5 with this
+# feature.
+level-5 = ["pq", "revocation/level-5"]
+# SLH-DSA variant: small signatures (s) by default, fast signing (f) with this
+# feature.
+slh-dsa-f = ["slh-dsa", "revocation/slh-dsa-f"]
 
 [[bin]]
-name = "standard_ml_dsa65"
+name = "standard_signature"
 required-features = ["pq"]
 
 [dependencies]
@@ -20,5 +31,6 @@ anyhow.workspace = true
 bench-core.workspace = true
 clap.workspace = true
 regex.workspace = true
+revocation = { path = "../revocation", default-features = false, optional = true }
 serde.workspace = true
 serde_json.workspace = true

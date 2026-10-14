@@ -7,7 +7,7 @@
 #
 # Binaries: standard_prove_verify | standard_prove_verify_no_cft
 #         | standard_prove_verify_revocation | standard_merkle_vs_flat
-#         | standard_communication_size | standard_ml_dsa65 (pq)
+#         | standard_communication_size | standard_signature (pq)
 #
 FROM rust:1-bookworm
 
@@ -33,12 +33,21 @@ RUN cmake -S third_party/longfellow-zk/lib -B .work/standard/longfellow-build \
                attr_commitment_experiment_test prove_verify_revocation_test \
                prove_verify_pq_test prove_verify_no_cft_pq_test \
                attr_commitment_experiment_pq_test prove_verify_revocation_pq_test \
-               ml_dsa_65_zk_test
+               ml_dsa_65_zk_test ml_dsa_87_zk_test
+
+# The copy with the SLH-DSA proofs, for standard_signature with slh-dsa.
+COPY third_party/longfellow-zk-slh/lib/ ./third_party/longfellow-zk-slh/lib/
+RUN cmake -S third_party/longfellow-zk-slh/lib -B .work/standard/longfellow-slh-build \
+      -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build .work/standard/longfellow-slh-build -j"$(nproc)" \
+      --target slh_dsa_zk_test slh_dsa_zk_5_test
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
-# CARGO_FEATURES: empty for the default post-quantum (pq) build;
-# --build-arg CARGO_FEATURES=--no-default-features builds the classical one.
+# CARGO_FEATURES: empty for the default post-quantum (pq) build with ML-DSA-65;
+# --build-arg CARGO_FEATURES=--no-default-features builds the classical one;
+# "--features level-5", "--features slh-dsa", "--features slh-dsa-f", each
+# with ",level-5" for category 5, choose the signature of standard_signature.
 ARG CARGO_FEATURES=""
 RUN cargo build --release --locked -p standard $CARGO_FEATURES \
  && cargo test --release --locked -p standard $CARGO_FEATURES

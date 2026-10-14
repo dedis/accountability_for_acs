@@ -63,6 +63,8 @@ htmlcov/
 .env.*
 !.env.example
 INFO.md
+# Local experiments, outside the workspace.
+/crates/scratchpad/
 
 *.md
 !README.md

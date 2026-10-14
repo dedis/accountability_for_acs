@@ -723,6 +723,7 @@ dependencies = [
  "bench-core",
  "clap",
  "regex",
+ "revocation",
  "serde",
  "serde_json",
 ]

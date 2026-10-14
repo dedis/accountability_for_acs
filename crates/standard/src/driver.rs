@@ -2,8 +2,8 @@
 //! prove/verify pass per repetition.
 //!
 //! `standard_prove_verify`, `standard_prove_verify_no_cft` and
-//! `standard_ml_dsa65` differ only in which binary they run, which filter they
-//! default to and how they label themselves.
+//! `standard_signature` differ only in which binary they run, which filter
+//! they default to and how they label themselves.
 
 use bench_core::stats::{self, P95};
 use std::collections::BTreeMap;
@@ -12,10 +12,13 @@ use anyhow::{bail, Result};
 
 use crate::cli::Common;
 use crate::gbench::{self, Meta};
-use crate::paths;
+use crate::paths::{self, Tree};
 use crate::runner::{self, Gbench};
 use bench_core::report;
 use bench_core::time;
+
+/// Times native signing once per repetition, in milliseconds.
+pub type SignTimer = fn(usize) -> Result<Vec<f64>>;
 
 /// What distinguishes one Combined benchmark from another.
 pub struct Bench {
@@ -24,10 +27,14 @@ pub struct Bench {
     /// `variant` field of the summary metadata, and the output folder name.
     pub variant: &'static str,
     pub default_filter: &'static str,
+    /// The Longfellow tree that builds the binary.
+    pub tree: Tree,
     /// Binary path relative to the Longfellow build tree.
     pub test_name: &'static str,
     /// Environment variables that may point at the binary, most specific first.
     pub bin_env: &'static [&'static str],
+    /// Native signing, for the signature benchmark.
+    pub sign: Option<SignTimer>,
 }
 
 pub fn run(bench: &Bench, common: Common, filter: Option<String>) -> Result<()> {
@@ -35,7 +42,12 @@ pub fn run(bench: &Bench, common: Common, filter: Option<String>) -> Result<()> 
         .or_else(|| std::env::var("BENCH_FILTER").ok().filter(|v| !v.is_empty()))
         .unwrap_or_else(|| bench.default_filter.to_string());
 
-    let bin = runner::resolve_bin(common.bin.clone(), bench.bin_env, bench.test_name)?;
+    let bin = runner::resolve_bin(
+        common.bin.clone(),
+        bench.bin_env,
+        bench.tree,
+        bench.test_name,
+    )?;
     let out_dir = common.out.dir(paths::STACK, bench.variant);
 
     if common.clean {
@@ -92,7 +104,7 @@ pub fn run(bench: &Bench, common: Common, filter: Option<String>) -> Result<()> 
         print_per_run_stats(&rows, &common);
     }
 
-    let Some(report) = gbench::build_timing_summary(
+    let Some(mut report) = gbench::build_timing_summary(
         &rows,
         Meta {
             kind: "longfellow",
@@ -104,6 +116,12 @@ pub fn run(bench: &Bench, common: Common, filter: Option<String>) -> Result<()> 
     ) else {
         bail!("No Combined prove_ns/verify_ns counters found (check --filter).");
     };
+    if let Some(sign) = bench.sign {
+        let sign_ms = sign(common.repetitions)?;
+        report.avg_ms.sign = stats::mean(&sign_ms);
+        report.stats_ms.sign = stats::summary_ms(&sign_ms, P95::FloorNMinus1);
+        stats::print_stats("sign (native)", &sign_ms, P95::FloorNMinus1);
+    }
 
     let written = report::write(&out_dir, &report)?;
     println!("Summary written: {}", written.display());

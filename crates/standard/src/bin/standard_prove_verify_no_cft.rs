@@ -5,13 +5,16 @@ use anyhow::Result;
 use clap::Parser;
 use standard::cli::Common;
 use standard::driver::{self, Bench};
+use standard::paths::Tree;
 
 const BENCH: Bench = Bench {
     backend: "Longfellow - prove_verify_no_cft (32 attrs, flat hash, 5 used; no CFT)",
     variant: "prove_verify_no_cft",
     default_filter: "BM_CredentialCommitmentProveVerifyNoCftCombined_P256",
+    tree: Tree::Main,
     test_name: standard::ec_bench!("prove_verify_no_cft"),
     bin_env: &["LONGFELLOW_NO_CFT_BENCH_BIN", "LONGFELLOW_CRED_BENCH_BIN"],
+    sign: None,
 };
 
 #[derive(Parser)]
