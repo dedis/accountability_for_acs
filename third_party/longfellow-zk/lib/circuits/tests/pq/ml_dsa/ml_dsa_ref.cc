@@ -476,42 +476,57 @@ std::optional<std::vector<uint8_t>> preprocess_message(
   return res;
 }
 
-// Explicit instantiations for ML-DSA-44 and ML-DSA-65
+// Explicit instantiations for ML-DSA-44, ML-DSA-65 and ML-DSA-87 (not
+// upstream)
 template Rq SampleInBall<MLDsa44Params>(
     const std::array<uint8_t, MLDsa44Params::c_tilde_bytes>& rho);
 template Rq SampleInBall<MLDsa65Params>(
     const std::array<uint8_t, MLDsa65Params::c_tilde_bytes>& rho);
+template Rq SampleInBall<MLDsa87Params>(
+    const std::array<uint8_t, MLDsa87Params::c_tilde_bytes>& rho);
 
 template MLDsaTypes<MLDsa44Params>::MatrixA ExpandA<MLDsa44Params>(
     const std::vector<uint8_t>& rho);
 template MLDsaTypes<MLDsa65Params>::MatrixA ExpandA<MLDsa65Params>(
     const std::vector<uint8_t>& rho);
+template MLDsaTypes<MLDsa87Params>::MatrixA ExpandA<MLDsa87Params>(
+    const std::vector<uint8_t>& rho);
 
 template std::pair<int32_t, int32_t> Decompose<MLDsa44Params>(int32_t r);
 template std::pair<int32_t, int32_t> Decompose<MLDsa65Params>(int32_t r);
+template std::pair<int32_t, int32_t> Decompose<MLDsa87Params>(int32_t r);
 
 template uint32_t UseHint<MLDsa44Params>(bool h, int32_t r);
 template uint32_t UseHint<MLDsa65Params>(bool h, int32_t r);
+template uint32_t UseHint<MLDsa87Params>(bool h, int32_t r);
 
 template std::optional<std::array<std::array<bool, N>, MLDsa44Params::K>>
 HintBitUnpack<MLDsa44Params>(const std::vector<uint8_t>& y);
 template std::optional<std::array<std::array<bool, N>, MLDsa65Params::K>>
 HintBitUnpack<MLDsa65Params>(const std::vector<uint8_t>& y);
+template std::optional<std::array<std::array<bool, N>, MLDsa87Params::K>>
+HintBitUnpack<MLDsa87Params>(const std::vector<uint8_t>& y);
 
 template std::optional<MLDsaTypes<MLDsa44Params>::Signature>
 sigDecode<MLDsa44Params>(const std::vector<uint8_t>& sigma);
 template std::optional<MLDsaTypes<MLDsa65Params>::Signature>
 sigDecode<MLDsa65Params>(const std::vector<uint8_t>& sigma);
+template std::optional<MLDsaTypes<MLDsa87Params>::Signature>
+sigDecode<MLDsa87Params>(const std::vector<uint8_t>& sigma);
 
 template MLDsaTypes<MLDsa44Params>::PublicKey pkDecode<MLDsa44Params>(
     const std::vector<uint8_t>& pk);
 template MLDsaTypes<MLDsa65Params>::PublicKey pkDecode<MLDsa65Params>(
+    const std::vector<uint8_t>& pk);
+template MLDsaTypes<MLDsa87Params>::PublicKey pkDecode<MLDsa87Params>(
     const std::vector<uint8_t>& pk);
 
 template std::array<uint8_t, MLDsa44Params::K * MLDsa44Params::w1_bytes>
 w1Encode<MLDsa44Params>(const MLDsaTypes<MLDsa44Params>::RqK& w1);
 template std::array<uint8_t, MLDsa65Params::K * MLDsa65Params::w1_bytes>
 w1Encode<MLDsa65Params>(const MLDsaTypes<MLDsa65Params>::RqK& w1);
+template std::array<uint8_t, MLDsa87Params::K * MLDsa87Params::w1_bytes>
+w1Encode<MLDsa87Params>(const MLDsaTypes<MLDsa87Params>::RqK& w1);
 
 }  // namespace ml_dsa
 }  // namespace proofs

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_library(ml_dsa OBJECT ml_dsa_shared.cc ml_dsa_44_examples.cc ml_dsa_65_examples.cc
- ml_dsa_ref.cc )
+ ml_dsa_87_examples.cc ml_dsa_ref.cc )
 
 proofs_add_test(ml_dsa_circuit_test)
 target_link_libraries(ml_dsa_circuit_test ml_dsa sha3)
@@ -28,8 +28,16 @@ proofs_add_test(ml_dsa_ref_test)
 target_link_libraries(ml_dsa_ref_test ml_dsa sha3)
 
 
-# ML-DSA-65 Combined prove/verify benchmark (not upstream). It runs only in the
-# pq build, so its proof system uses SHAKE256 (util/crypto.h).
+# ML-DSA-65 and ML-DSA-87 Combined prove/verify benchmarks (not upstream). They
+# run only in the pq build, so their proof system uses SHAKE256
+# (util/crypto.h). ML-DSA-87 (category 5) uses 64-byte digests.
 proofs_add_test(ml_dsa_65_zk_test)
-target_link_libraries(ml_dsa_65_zk_test ml_dsa sha3)
-target_compile_definitions(ml_dsa_65_zk_test PRIVATE PROOFS_SHAKE256)
+proofs_add_test_digest64(ml_dsa_87_zk_test ml_dsa_87_zk_test.cc)
+foreach(PROG ml_dsa_65_zk_test ml_dsa_87_zk_test)
+  target_link_libraries(${PROG} ml_dsa sha3)
+  target_compile_definitions(${PROG} PRIVATE PROOFS_SHAKE256)
+endforeach()
+
+proofs_add_test(fp24_ext_test)
+target_link_libraries(fp24_ext_test ml_dsa sha3)
+target_compile_definitions(fp24_ext_test PRIVATE PROOFS_SHAKE256)

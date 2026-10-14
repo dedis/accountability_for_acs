@@ -15,6 +15,12 @@
 add_library(util OBJECT log.cc crypto.cc)
 target_link_libraries(util crypto zstd)
 
+# util for the programs with 64-byte SHAKE256 digests (NIST category 5; not
+# upstream). The definition reaches every program that links util64.
+add_library(util64 OBJECT log.cc crypto.cc)
+target_link_libraries(util64 crypto zstd)
+target_compile_definitions(util64 PUBLIC PROOFS_SHAKE256_DIGEST_BYTES=64)
+
 
 # SHAKE256 hash and PRF of the pq build (not upstream).
 proofs_add_test(crypto_shake256_test)

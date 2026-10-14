@@ -118,6 +118,10 @@ using MLDsa44Params =
 using MLDsa65Params =
     MLDsaParams<6, 5, 49, 55, 48, 524288, 261888, 196, 20, 4, 128>;
 
+// ML-DSA-87 parameters (FIPS 204 Section 4, Table 1). Not upstream.
+using MLDsa87Params =
+    MLDsaParams<8, 7, 60, 75, 64, 524288, 261888, 120, 20, 4, 128>;
+
 template <typename Params>
 struct MLDsaTypes {
   using RqK = std::array<Rq, Params::K>;

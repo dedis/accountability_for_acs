@@ -22,8 +22,10 @@
 // openssl library.
 //
 // With PROOFS_SHAKE256 (the post-quantum build; not upstream), Hash is SHAKE256
-// with a 48-byte output (NIST category 3) and PRF is keyed SHAKE256. Every
-// translation unit of a program must agree on PROOFS_SHAKE256.
+// with a 48-byte output (192-bit collision resistance: NIST category 3 or 4,
+// not 5; PROOFS_SHAKE256_DIGEST_BYTES=64 gives 256 bits for category 5) and
+// PRF is keyed SHAKE256. Every translation unit of a program must agree on
+// PROOFS_SHAKE256 and PROOFS_SHAKE256_DIGEST_BYTES.
 
 #include <cstddef>
 #include <cstdint>
@@ -37,7 +39,11 @@
 namespace proofs {
 
 constexpr size_t kSHA256DigestSize = 32;
-constexpr size_t kSHAKE256DigestSize = 48;
+// 48 bytes (192-bit collisions) by default; 64 for NIST category 5.
+#ifndef PROOFS_SHAKE256_DIGEST_BYTES
+#define PROOFS_SHAKE256_DIGEST_BYTES 48
+#endif
+constexpr size_t kSHAKE256DigestSize = PROOFS_SHAKE256_DIGEST_BYTES;
 constexpr size_t kPRFInputSize = 16;
 
 class SHA256 {

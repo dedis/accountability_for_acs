@@ -60,6 +60,16 @@ macro(proofs_add_test PROG)
     proofs_add_testing_libraries(${PROG})
 endmacro()
 
+# A test program PROG built from SRC with 64-byte SHAKE256 digests (util64;
+# not upstream).
+macro(proofs_add_test_digest64 PROG SRC)
+    add_executable(${PROG} ${SRC})
+    target_link_libraries(${PROG} ec)
+    target_link_libraries(${PROG} algebra)
+    target_link_libraries(${PROG} util64)
+    proofs_add_testing_libraries(${PROG})
+endmacro()
+
 macro(proofs_add_tests)
     foreach (PROG ${ARGN})
         proofs_add_test(${PROG})
