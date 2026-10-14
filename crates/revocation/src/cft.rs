@@ -1,17 +1,21 @@
 //! CFT batch construction and the two revocation strategies under measurement.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
+use std::panic;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Result};
 use ark_ec::CurveGroup;
 use ark_ff::Field;
+use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 
-use crate::c4;
+use crate::c4::{self, Scheme};
 use babyjub::curve::{base8, rand_scalar, Fr, Point, PointAffine};
-use babyjub::eddsa::{SecretKey, Signature};
 use babyjub::poseidon::Poseidon;
 
 /// One authority's key pair.
@@ -51,19 +55,19 @@ impl Keys {
     }
 }
 
-/// One conditionally-openable tag.
+/// One conditionally-openable tag, with a C4 signature of type `S`.
 #[derive(Clone, Copy, Debug)]
-pub struct Cft {
+pub struct Cft<S> {
     pub c1: Point,
     pub c2: Point,
     pub c3: Point,
-    pub c4: Signature,
+    pub c4: S,
     pub t: Fr,
 }
 
 /// A batch of CFTs with one identity deliberately repeated.
-pub struct Batch {
-    pub cfts: Vec<Cft>,
+pub struct Batch<S> {
+    pub cfts: Vec<Cft<S>>,
     pub n_recurring: usize,
     pub n_unique: usize,
     pub recurring_pct: f64,
@@ -71,16 +75,16 @@ pub struct Batch {
 }
 
 /// Builds `n` CFTs, of which `recurring_pct` (at least the PID threshold) share
-/// one identity. `C4 = EdDSA(H(t, D2))` under that identity's key (see
-/// [`crate::c4`]).
+/// one identity. `C4 = Sign(H(t, D2))` under that identity's `scheme` key (see
+/// [`crate::c4`]). Key generation and signing run on all available cores.
 /// Requires at least two CFTs and a recurring fraction in `0..=1`.
-pub fn build_batch<R: Rng + ?Sized>(
-    poseidon: &Poseidon,
+pub fn build_batch<S: Scheme, R: Rng + ?Sized>(
+    scheme: &S,
     pk_ag: Point,
     n: usize,
     recurring_pct: f64,
     rng: &mut R,
-) -> Result<Batch> {
+) -> Result<Batch<S::Signature>> {
     ensure!(n >= 2, "CFT batch size must be at least 2, got {n}");
     ensure!(
         (0.0..=1.0).contains(&recurring_pct),
@@ -90,33 +94,28 @@ pub fn build_batch<R: Rng + ?Sized>(
     let n_recurring = usize::max((n as f64 * recurring_pct).round() as usize, pid_threshold);
     let n_unique = n - n_recurring;
 
-    let recurring = SecretKey::rand(rng);
-    let recurring_id = recurring.public_key();
+    // User 0 is the recurring identity; users 1..=n_unique occur once.
+    let users = par_map(n_unique + 1, rng, |_, rng, _| scheme.keygen(rng))?;
 
-    let mut slots: Vec<(Point, SecretKey)> = Vec::with_capacity(n);
-    slots.extend(std::iter::repeat_n((recurring_id, recurring), n_recurring));
-    slots.extend((0..n_unique).map(|_| {
-        let sk = SecretKey::rand(rng);
-        (sk.public_key(), sk)
-    }));
+    let mut slots: Vec<usize> = Vec::with_capacity(n);
+    slots.extend(std::iter::repeat_n(0, n_recurring));
+    slots.extend(1..=n_unique);
     slots.shuffle(rng);
 
-    let cfts = slots
-        .into_iter()
-        .map(|(id_u, user_sk)| {
-            let r1 = rand_scalar(rng);
-            let r2 = rand_scalar(rng);
-            let t = rand_scalar(rng);
-            let d2 = (pk_ag * r2).into_affine();
-            Cft {
-                c1: base8() * r1,
-                c2: base8() * r2,
-                c3: id_u + pk_ag * r1,
-                c4: c4::sign(poseidon, &user_sk, t, d2, rng),
-                t,
-            }
+    let cfts = par_map(n, rng, |i, rng, poseidon| {
+        let (id_u, user_sk) = &users[slots[i]];
+        let r1 = rand_scalar(rng);
+        let r2 = rand_scalar(rng);
+        let t = rand_scalar(rng);
+        let d2 = (pk_ag * r2).into_affine();
+        Ok(Cft {
+            c1: base8() * r1,
+            c2: base8() * r2,
+            c3: *id_u + pk_ag * r1,
+            c4: c4::sign(poseidon, scheme, user_sk, t, d2, rng)?,
+            t,
         })
-        .collect();
+    })?;
 
     Ok(Batch {
         cfts,
@@ -125,6 +124,52 @@ pub fn build_batch<R: Rng + ?Sized>(
         recurring_pct,
         pid_threshold,
     })
+}
+
+/// Computes `f(i)` for `i` in `0..len` on all available cores and returns the
+/// results in index order. Workers take the next index from a shared counter,
+/// so slower cores take fewer items. Each worker has its own RNG, seeded from
+/// `rng`, and its own [`Poseidon`], which is not `Sync`.
+fn par_map<T, R, F>(len: usize, rng: &mut R, f: F) -> Result<Vec<T>>
+where
+    T: Send,
+    R: Rng + ?Sized,
+    F: Fn(usize, &mut StdRng, &Poseidon) -> Result<T> + Sync,
+{
+    let workers = thread::available_parallelism()
+        .map_or(1, NonZeroUsize::get)
+        .min(len);
+    let rngs = (0..workers)
+        .map(|_| StdRng::from_rng(&mut *rng))
+        .collect::<Result<Vec<_>, _>>()?;
+    let next = AtomicUsize::new(0);
+    let parts = thread::scope(|scope| {
+        let handles: Vec<_> = rngs
+            .into_iter()
+            .map(|mut rng| {
+                let (f, next) = (&f, &next);
+                scope.spawn(move || -> Result<Vec<(usize, T)>> {
+                    let poseidon = Poseidon::new();
+                    let mut done = Vec::new();
+                    for _ in 0..len {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= len {
+                            break;
+                        }
+                        done.push((i, f(i, &mut rng, &poseidon)?));
+                    }
+                    Ok(done)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|e| panic::resume_unwind(e)))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    let mut out: Vec<(usize, T)> = parts.into_iter().flatten().collect();
+    out.sort_unstable_by_key(|&(i, _)| i);
+    Ok(out.into_iter().map(|(_, x)| x).collect())
 }
 
 /// Wall-clock breakdown of one scenario, in the phases the paper reports.
@@ -154,7 +199,7 @@ struct Share {
 }
 
 #[inline]
-fn partial_decrypt(cft: &Cft, sk: Fr) -> Share {
+fn partial_decrypt<S>(cft: &Cft<S>, sk: Fr) -> Share {
     Share {
         d1: cft.c1 * sk,
         d2: cft.c2 * sk,
@@ -162,7 +207,12 @@ fn partial_decrypt(cft: &Cft, sk: Fr) -> Share {
 }
 
 /// Direct decrypt: every CFT is opened, so `n_after_filter == n`.
-pub fn bench_direct_decrypt(poseidon: &Poseidon, batch: &Batch, keys: &Keys) -> Result<Timing> {
+pub fn bench_direct_decrypt<S: Scheme>(
+    poseidon: &Poseidon,
+    scheme: &S,
+    batch: &Batch<S::Signature>,
+    keys: &Keys,
+) -> Result<Timing> {
     let cfts = &batch.cfts;
     let n = cfts.len();
 
@@ -186,7 +236,7 @@ pub fn bench_direct_decrypt(poseidon: &Poseidon, batch: &Batch, keys: &Keys) -> 
         let d1 = police.d1 + ngo_shares[i].d1 + judge_shares[i].d1;
         let d2 = police.d2 + ngo_shares[i].d2 + judge_shares[i].d2;
         let id_u = (cft.c3 - d1).into_affine();
-        if !c4::verify(poseidon, id_u, cft.t, d2.into_affine(), &cft.c4) {
+        if !c4::verify(poseidon, scheme, id_u, cft.t, d2.into_affine(), &cft.c4) {
             bail!("C4 verification failed (direct-decrypt)");
         }
     }
@@ -204,17 +254,16 @@ pub fn bench_direct_decrypt(poseidon: &Poseidon, batch: &Batch, keys: &Keys) -> 
     })
 }
 
-/// A CFT in flight through the sequential unlink chain.
-struct LinkEntry {
-    c2: Point,
-    c4: Signature,
-    t: Fr,
+/// A CFT in flight through the sequential unlink chain. It borrows the CFT so
+/// that large C4 signatures are not copied.
+struct LinkEntry<'a, S> {
+    cft: &'a Cft<S>,
     d1: Point,
     d3: Point,
 }
 
 /// Re-randomises `(D1, D3)` under one authority's key and a fresh blinding `k`.
-fn batch_link<R: Rng + ?Sized>(entries: &mut [LinkEntry], sk: Fr, rng: &mut R) -> Fr {
+fn batch_link<S, R: Rng + ?Sized>(entries: &mut [LinkEntry<S>], sk: Fr, rng: &mut R) -> Fr {
     let k = rand_scalar(rng);
     for e in entries.iter_mut() {
         let d1 = e.d1;
@@ -228,7 +277,7 @@ fn batch_link<R: Rng + ?Sized>(entries: &mut [LinkEntry], sk: Fr, rng: &mut R) -
 ///
 /// Affine normalisation is batched (one field inversion for the whole set
 /// instead of one per entry, which is what the JS `ptKey` cost).
-fn retain_recurring(entries: &mut Vec<LinkEntry>, min_count: usize) {
+fn retain_recurring<S>(entries: &mut Vec<LinkEntry<S>>, min_count: usize) {
     let projective: Vec<Point> = entries.iter().map(|e| e.d3).collect();
     let pids: Vec<PointAffine> = Point::normalize_batch(&projective);
 
@@ -247,24 +296,23 @@ fn retain_recurring(entries: &mut Vec<LinkEntry>, min_count: usize) {
 
 /// Link then decrypt: linking touches all `n`, decryption only the recurring
 /// pseudonyms that survived the filter.
-pub fn bench_link_decrypt<R: Rng + ?Sized>(
+pub fn bench_link_decrypt<S: Scheme, R: Rng + ?Sized>(
     poseidon: &Poseidon,
-    batch: &Batch,
+    scheme: &S,
+    batch: &Batch<S::Signature>,
     keys: &Keys,
     rng: &mut R,
 ) -> Result<Timing> {
     let n = batch.cfts.len();
     let min_count = batch.pid_threshold;
 
-    let mut entries: Vec<LinkEntry> = batch
+    let mut entries: Vec<LinkEntry<S::Signature>> = batch
         .cfts
         .iter()
-        .map(|c| LinkEntry {
-            c2: c.c2,
-            c4: c.c4,
-            t: c.t,
-            d1: c.c1,
-            d3: c.c3,
+        .map(|cft| LinkEntry {
+            cft,
+            d1: cft.c1,
+            d3: cft.c3,
         })
         .collect();
 
@@ -292,14 +340,14 @@ pub fn bench_link_decrypt<R: Rng + ?Sized>(
     let t0 = Instant::now();
     let inv_ngo = k_ngo.inverse().expect("blinding factor is non-zero");
     let mut pid: Vec<Point> = entries.iter().map(|e| e.d3 * inv_ngo).collect();
-    let mut d2: Vec<Point> = entries.iter().map(|e| e.c2 * keys.ngo.sk).collect();
+    let mut d2: Vec<Point> = entries.iter().map(|e| e.cft.c2 * keys.ngo.sk).collect();
     let ngo_dec = t0.elapsed();
 
     let t0 = Instant::now();
     let inv_judge = k_judge.inverse().expect("blinding factor is non-zero");
     for ((p, acc), e) in pid.iter_mut().zip(d2.iter_mut()).zip(entries.iter()) {
         *p *= inv_judge;
-        *acc += e.c2 * keys.judge.sk;
+        *acc += e.cft.c2 * keys.judge.sk;
     }
     let judge_dec = t0.elapsed();
 
@@ -307,8 +355,8 @@ pub fn bench_link_decrypt<R: Rng + ?Sized>(
     let inv_police = k_police.inverse().expect("blinding factor is non-zero");
     for ((p, acc), e) in pid.iter().zip(d2.iter()).zip(entries.iter()) {
         let id = (*p * inv_police).into_affine();
-        let d2 = (*acc + e.c2 * keys.police.sk).into_affine();
-        if !c4::verify(poseidon, id, e.t, d2, &e.c4) {
+        let d2 = (*acc + e.cft.c2 * keys.police.sk).into_affine();
+        if !c4::verify(poseidon, scheme, id, e.cft.t, d2, &e.cft.c4) {
             bail!("C4 verification failed (link-decrypt)");
         }
     }
@@ -331,39 +379,51 @@ pub fn bench_link_decrypt<R: Rng + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::c4::EdDsa;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    #[test]
-    fn both_strategies_open_a_batch() {
+    fn open_batch<S: Scheme>(scheme: &S, n: usize, pcts: &[f64]) {
         let mut rng = StdRng::seed_from_u64(42);
         let poseidon = Poseidon::new();
         let keys = Keys::generate(&mut rng);
 
-        for pct in [0.1, 0.5] {
-            let batch = build_batch(&poseidon, keys.pk_ag, 40, pct, &mut rng).unwrap();
-            let direct = bench_direct_decrypt(&poseidon, &batch, &keys).unwrap();
-            assert_eq!(direct.n_after_filter, 40);
+        for &pct in pcts {
+            let batch = build_batch(scheme, keys.pk_ag, n, pct, &mut rng).unwrap();
+            let direct = bench_direct_decrypt(&poseidon, scheme, &batch, &keys).unwrap();
+            assert_eq!(direct.n_after_filter, n);
             assert_eq!(direct.link, Duration::ZERO);
 
-            let linked = bench_link_decrypt(&poseidon, &batch, &keys, &mut rng).unwrap();
+            let linked = bench_link_decrypt(&poseidon, scheme, &batch, &keys, &mut rng).unwrap();
             assert_eq!(linked.n_after_filter, batch.n_recurring);
         }
     }
 
     #[test]
+    fn both_strategies_open_a_batch() {
+        open_batch(&EdDsa, 40, &[0.1, 0.5]);
+    }
+
+    /// The post-quantum C4 of the build. The batch is small (2 recurring and
+    /// 2 unique CFTs): SLH-DSA-SHAKE-192s and -256s sign in about 1.1 s.
+    #[cfg(feature = "pq")]
+    #[test]
+    fn both_strategies_open_a_post_quantum_batch() {
+        open_batch(&c4::Selected::default(), 4, &[0.5]);
+    }
+
+    #[test]
     fn rejects_invalid_batch_parameters() {
         let mut rng = StdRng::seed_from_u64(42);
-        let poseidon = Poseidon::new();
         let keys = Keys::generate(&mut rng);
         for n in [0, 1] {
-            let error = build_batch(&poseidon, keys.pk_ag, n, 0.1, &mut rng)
+            let error = build_batch(&EdDsa, keys.pk_ag, n, 0.1, &mut rng)
                 .err()
                 .unwrap();
             assert!(error.to_string().contains("at least 2"));
         }
         for pct in [-0.1, 1.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let error = build_batch(&poseidon, keys.pk_ag, 2, pct, &mut rng)
+            let error = build_batch(&EdDsa, keys.pk_ag, 2, pct, &mut rng)
                 .err()
                 .unwrap();
             assert!(error.to_string().contains("fraction must be in 0..=1"));
@@ -376,19 +436,19 @@ mod tests {
         let poseidon = Poseidon::new();
         let keys = Keys::generate(&mut rng);
         for pct in [0.0, 0.1, 1.0] {
-            let batch = build_batch(&poseidon, keys.pk_ag, 2, pct, &mut rng).unwrap();
+            let batch = build_batch(&EdDsa, keys.pk_ag, 2, pct, &mut rng).unwrap();
             assert_eq!(batch.cfts.len(), 2);
             assert_eq!(batch.pid_threshold, 2);
             assert_eq!(batch.n_recurring, 2);
             assert_eq!(batch.n_unique, 0);
             assert_eq!(
-                bench_direct_decrypt(&poseidon, &batch, &keys)
+                bench_direct_decrypt(&poseidon, &EdDsa, &batch, &keys)
                     .unwrap()
                     .n_after_filter,
                 2
             );
             assert_eq!(
-                bench_link_decrypt(&poseidon, &batch, &keys, &mut rng)
+                bench_link_decrypt(&poseidon, &EdDsa, &batch, &keys, &mut rng)
                     .unwrap()
                     .n_after_filter,
                 2

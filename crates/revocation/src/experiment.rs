@@ -9,7 +9,8 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::cft::{self, Batch, Keys, Timing};
+use crate::c4;
+use crate::cft::{self, Keys, Timing};
 use crate::csv;
 use crate::env;
 use crate::paths::with_suffix;
@@ -253,8 +254,10 @@ fn run_scenario(
     recurring_pct: f64,
     run: usize,
 ) -> Result<Row> {
-    let batch: Batch = cft::build_batch(
-        &ctx.poseidon,
+    // A fresh scheme per batch: a post-quantum C4 keeps a registry of keys.
+    let scheme = c4::Selected::default();
+    let batch = cft::build_batch(
+        &scheme,
         ctx.keys.pk_ag,
         set_size,
         recurring_pct,
@@ -262,9 +265,11 @@ fn run_scenario(
     )?;
 
     let timing = match benchmark {
-        Benchmark::DirectDecrypt => cft::bench_direct_decrypt(&ctx.poseidon, &batch, &ctx.keys)?,
+        Benchmark::DirectDecrypt => {
+            cft::bench_direct_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys)?
+        }
         Benchmark::LinkDecrypt => {
-            cft::bench_link_decrypt(&ctx.poseidon, &batch, &ctx.keys, &mut ctx.rng)?
+            cft::bench_link_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys, &mut ctx.rng)?
         }
     };
 
@@ -291,6 +296,7 @@ pub fn run(benchmark: Benchmark, ctx: &mut Context, options: &Options) -> Result
     let prefix = options.results_dir.join(benchmark.as_str());
 
     println!("CFT experiment: {benchmark}");
+    println!("  C4 signature: {}", c4::SELECTED_NAME);
     println!(
         "  sizes={} recurring%={} runs={}",
         options

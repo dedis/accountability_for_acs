@@ -4,6 +4,7 @@
 use anyhow::{bail, Result};
 use ark_ec::CurveGroup;
 use babyjub::curve::{base8, BASE8_X, BASE8_Y};
+use revocation::c4;
 use revocation::cft;
 use revocation::experiment::Context;
 
@@ -15,11 +16,14 @@ fn main() -> Result<()> {
         bail!("subgroup generator is not circom's Base8");
     }
 
+    println!("C4 signature: {}", c4::SELECTED_NAME);
     let mut ctx = Context::new();
     for pct in [0.1, 0.5] {
-        let batch = cft::build_batch(&ctx.poseidon, ctx.keys.pk_ag, 100, pct, &mut ctx.rng)?;
-        cft::bench_direct_decrypt(&ctx.poseidon, &batch, &ctx.keys)?;
-        let linked = cft::bench_link_decrypt(&ctx.poseidon, &batch, &ctx.keys, &mut ctx.rng)?;
+        let scheme = c4::Selected::default();
+        let batch = cft::build_batch(&scheme, ctx.keys.pk_ag, 100, pct, &mut ctx.rng)?;
+        cft::bench_direct_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys)?;
+        let linked =
+            cft::bench_link_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys, &mut ctx.rng)?;
         if linked.n_after_filter != batch.n_recurring {
             bail!(
                 "link-decrypt kept {} entries, expected {}",

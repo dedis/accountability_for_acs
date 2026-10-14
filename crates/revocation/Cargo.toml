@@ -9,7 +9,15 @@ description = "Baby Jubjub CFT anonymity-revocation benchmarks"
 
 [features]
 default = ["pq"]
-pq = ["dep:sha3"]
+pq = ["dep:sha3", "dep:fips204", "dep:fips205"]
+# Signature scheme of C4 under pq (src/pq_sig.rs): ML-DSA by default,
+# SLH-DSA with this feature.
+slh-dsa = ["pq"]
+# NIST security category of the C4 signature: 3 by default, 5 with this feature.
+level-5 = ["pq"]
+# SLH-DSA variant: small signatures (s) by default, fast signing (f) with this
+# feature.
+slh-dsa-f = ["slh-dsa"]
 
 [dependencies]
 anyhow.workspace = true
@@ -21,3 +29,5 @@ rand.workspace = true
 regex.workspace = true
 clap.workspace = true
 sha3 = { workspace = true, optional = true }
+fips204 = { workspace = true, optional = true }
+fips205 = { workspace = true, optional = true }
