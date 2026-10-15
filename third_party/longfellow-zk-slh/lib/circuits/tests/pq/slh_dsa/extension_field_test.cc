@@ -2,6 +2,7 @@
 // relation of y, serialization, the subfield, and the coordinate-wise
 // Reed-Solomon code against LCH14 over the extension itself.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "gf2k/gf2_128.h"
 #include "gf2k/gf2_128_ext.h"
 #include "gf2k/lch14_reed_solomon.h"
+#include "ligero/ligero_verifier.h"
 #include "random/transcript.h"
 #include "gtest/gtest.h"
 
@@ -76,6 +78,53 @@ void CheckField() {
   }
 }
 
+// GF2_128 subfield membership and bytes (solve() by table; not upstream):
+// every element of GF(2^16) round-trips through its two bytes; an element
+// plus x^k, for x^k outside the subfield, and random elements are outside.
+TEST(GF2_128, SubfieldBytes) {
+  const GF2_128<> F;
+  for (uint64_t u = 0; u < 65536; ++u) {
+    const uint8_t ab[2] = {uint8_t(u), uint8_t(u >> 8)};
+    const auto e = F.of_bytes_subfield(ab);
+    ASSERT_TRUE(e.has_value());
+    ASSERT_TRUE(F.in_subfield(e.value())) << u;
+    uint8_t got[2];
+    F.to_bytes_subfield(got, e.value());
+    ASSERT_EQ(uint64_t(got[0] | got[1] << 8), u);
+    for (size_t k : {1, 17, 64, 127}) {
+      std::array<uint64_t, 2> xk = {0, 0};
+      xk[k / 64] = uint64_t(1) << (k % 64);
+      const auto x = F.of_scalar_field(xk);
+      if (!F.in_subfield(x) && u % 251 == 0) {
+        EXPECT_FALSE(F.in_subfield(F.addf(e.value(), x))) << u << " " << k;
+      }
+    }
+  }
+  Transcript rng((uint8_t*)"sub", 3);
+  for (size_t i = 0; i < 1000; ++i) EXPECT_FALSE(F.in_subfield(rng.elt(F)));
+}
+
+// GF2_128Ext::Acc (not upstream) against sums of mulf().
+template <size_t D>
+void CheckAccumulator() {
+  const GF2_128Ext<D> F;
+  Transcript rng((uint8_t*)"acc", 3);
+  auto a = F.acc();
+  auto want = F.zero();
+  EXPECT_EQ(F.reduce(a), want);
+  for (size_t i = 0; i < 1000; ++i) {
+    const auto x = rng.elt(F), y = rng.elt(F);
+    F.mac(a, x, y);
+    F.add(want, F.mulf(x, y));
+  }
+  EXPECT_EQ(F.reduce(a), want);
+}
+
+TEST(GF2_128Ext, Accumulator) {
+  CheckAccumulator<2>();
+  CheckAccumulator<3>();
+}
+
 TEST(GF2_128Ext, Degree2) { CheckField<2>(); }
 TEST(GF2_128Ext, Degree3) { CheckField<3>(); }
 
@@ -95,6 +144,13 @@ void CheckReedSolomon(size_t n, size_t m) {
   direct.make(n, m)->interpolate(&want[0]);
   EXPECT_EQ(got, want);
 }
+
+// The LCH14 code has no interpolate_at: the Ligero verifier encodes in
+// full.
+static_assert(!InterpolatesAt<
+              ComponentwiseReedSolomon<GF2_128Ext<2>,
+                                       LCH14ReedSolomonFactory<GF2_128<>>>,
+              GF2_128Ext<2>>::value);
 
 TEST(GF2_128Ext, ComponentwiseReedSolomon) {
   CheckReedSolomon<2>(37, 200);

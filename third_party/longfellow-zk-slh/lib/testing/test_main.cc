@@ -43,7 +43,8 @@ int main(int argc, char **argv) {
   if (bench) {
     // By default run no benchmarks
     benchmark::Initialize(&argc, argv);
-    return benchmark::RunSpecifiedBenchmarks();
+    // Fails if the filter matches no benchmark.
+    return benchmark::RunSpecifiedBenchmarks() == 0;
   }
 
   return RUN_ALL_TESTS();

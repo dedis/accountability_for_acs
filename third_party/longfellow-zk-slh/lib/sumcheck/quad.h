@@ -22,6 +22,7 @@
 #include <memory>
 #include <vector>
 
+#include "algebra/base_coordinates.h"
 #include "arrays/affine.h"
 #include "arrays/eqs.h"
 #include "sumcheck/equad.h"
@@ -199,15 +200,32 @@ class Quad {
     Eqs<Field> eqh0(logw, nw, H0, F);
     Eqs<Field> eqh1(logw, nw, H1, F);
 
-    Elt s = F.zero();
-
+    // Not upstream: the terms of one pair of hands are adjacent (canonical
+    // order), so their coefficients are summed before the products by
+    // EQ[h0] and EQ[h1], the last summed before its reduction (MacOf); a
+    // coefficient in the base field multiplies by base multiplications
+    // (mul_coefficient). The same sum.
+    using Mac = MacOf<Field>;
+    auto s = Mac::zero(F);
+    Elt q = F.zero();
+    bool first = true;
+    quad_corner_t h[2] = {};
     for (const auto& ec : *this) {
-      Elt q = prep_v(ec.v, eqg[corner_t(ec.g)], beta, F);
-      F.mul(q, eqh0.at(corner_t(ec.h[0])));
-      F.mul(q, eqh1.at(corner_t(ec.h[1])));
-      F.add(s, q);
+      if (!first && (ec.h[0] != h[0] || ec.h[1] != h[1])) {
+        Mac::mac(s, F.mulf(q, eqh0.at(corner_t(h[0]))),
+                 eqh1.at(corner_t(h[1])), F);
+        q = F.zero();
+      }
+      first = false;
+      h[0] = ec.h[0];
+      h[1] = ec.h[1];
+      F.add(q, prep_v(ec.v, eqg[corner_t(ec.g)], beta, F));
     }
-    return s;
+    if (!first) {
+      Mac::mac(s, F.mulf(q, eqh0.at(corner_t(h[0]))), eqh1.at(corner_t(h[1])),
+               F);
+    }
+    return Mac::reduce(s, F);
   }
 
  private:
@@ -216,7 +234,7 @@ class Quad {
     if (v == F.zero()) {
       return F.mulf(beta, dot);
     } else {
-      return F.mulf(v, dot);
+      return mul_coefficient(v, dot, F);  // not upstream
     }
   }
 

@@ -172,7 +172,8 @@ class MaliciousZkProver : public MaliciousProverLayers<Field> {
         c_, pub, zkp.proof, &aux, a, b, row, tsp, n_witness_, f_);
     if (extra != nullptr) {
       for (const auto& e : extra->a) {
-        a.push_back(LigeroLinearConstraint<Field>{ci + e.c, e.w, e.k});
+        a.push_back(LigeroLinearConstraint<Field>{
+            ci + e.c, e.w, e.neg ? f_.mone() : f_.one()});
       }
       ci += extra->b.size();
     }

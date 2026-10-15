@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "circuits/tests/pq/slh_dsa/slh_dsa.h"
@@ -217,6 +218,104 @@ TEST(SlhDsaZk, EvalShortcutsMatchReference) {
   }
   // The circuit has terms with other coefficients, so the general path ran.
   EXPECT_GT(general, 0u);
+}
+
+// All assertions of C hold on IN and its outputs are zero (reference_eval
+// layer by layer).
+bool Holds(const Circuit<Field>& c, const Dense<Field>& in, const Field& F) {
+  auto w = std::make_unique<Dense<Field>>(in.n0_, in.n1_);
+  w->v_ = in.v_;
+  for (size_t ly = c.nl; ly-- > 0;) {
+    const corner_t nw = ly > 0 ? c.l[ly - 1].nw : c.nv;
+    auto v = std::make_unique<Dense<Field>>(in.n0_, nw);
+    if (!reference_eval(*c.l[ly].quad, v.get(), *w, F)) return false;
+    w = std::move(v);
+  }
+  for (const auto& x : w->v_) {
+    if (x != F.zero()) return false;
+  }
+  return true;
+}
+
+// A plan with ONE_BLOCK (not upstream) has the copies and results of the
+// general plan, almost all of them one-block copies. The one-block step
+// circuit holds on one-block copies of each kind and fails with a changed R
+// bit or private block bit; the general circuit holds on the other copies.
+TEST(SlhDsaZk, OneBlockStep) {
+  using P = SlhDsaShake192s;
+  using Zk = SlhDsaZk<P, ZkCategory3>;
+  const Field F;
+  const Example ex = Example192s();
+  const Plan<P> general(ex.pk, ex.ctx, ex.msg, ex.sig);
+  const Plan<P> plan(Val::konst(ex.pk.data(), P::n),
+                     Val::konst(ex.pk.data() + P::n, P::n), ex.ctx,
+                     Val::free(ex.msg.data(), ex.msg.size()), ex.sig,
+                     /*sig_public=*/false, /*one_block=*/true);
+  ASSERT_TRUE(plan.native_ok);
+  ASSERT_EQ(plan.copies.size(), general.copies.size());
+  std::vector<size_t> ones, others;
+  for (size_t c = 0; c < plan.copies.size(); ++c) {
+    const Copy& cp = plan.copies[c];
+    EXPECT_EQ(std::vector<uint8_t>(cp.r, cp.r + P::n),
+              std::vector<uint8_t>(general.copies[c].r,
+                                   general.copies[c].r + P::n));
+    (cp.one ? ones : others).push_back(c);
+  }
+  EXPECT_GT(ones.size(), 98 * plan.copies.size() / 100);
+
+  // Up to 4 one-block copies of each kind: a FORS leaf, a Merkle step, an
+  // inactive and an active WOTS+ step, a checksum step.
+  std::vector<size_t> pick;
+  auto take = [&](auto pred) {
+    size_t n = 0;
+    for (size_t c : ones) {
+      if (n < 4 && pred(plan.copies[c])) {
+        pick.push_back(c);
+        ++n;
+      }
+    }
+  };
+  take([](const Copy& cp) { return !cp.swap_en && !cp.is_wots; });
+  take([](const Copy& cp) { return cp.swap_en; });
+  take([](const Copy& cp) { return cp.is_wots && cp.j < cp.digit; });
+  take([](const Copy& cp) { return cp.is_wots && cp.j >= cp.digit; });
+  take([](const Copy& cp) { return cp.is_acc; });
+  ASSERT_EQ(pick.size(), 20u);
+  const size_t nc = pick.size();
+  const auto c1 = Zk::make_circuit1(nc);
+  Dense<Field> w(nc, c1->ninputs);
+  for (size_t c = 0; c < nc; ++c) {
+    Zk::fill_public1(plan.copies[pick[c]], w, c, F);
+    Zk::fill_private1(plan.copies[pick[c]], w, c, F);
+  }
+  EXPECT_TRUE(Holds(*c1, w, F));
+  using L1 = Layout1<P::n>;
+  auto flip = [&](size_t c, size_t off) {
+    Dense<Field> bad(nc, c1->ninputs);
+    bad.v_ = w.v_;
+    auto& x = bad.v_[nc * (L1::npub + off) + c];
+    x = x == F.zero() ? F.one() : F.zero();
+    return Holds(*c1, bad, F);
+  };
+  for (size_t c = 0; c < nc; ++c) {
+    EXPECT_FALSE(flip(c, L1::r + 8 * (c % P::n) + c % 8)) << "R, copy " << c;
+    // A private bit of the message window.
+    const Copy& cp = plan.copies[pick[c]];
+    size_t i = L1::window;
+    while (i < L1::W && cp.mask[i] == 0) ++i;
+    ASSERT_LT(i, L1::W);
+    size_t b = 0;
+    while (((cp.mask[i] >> b) & 1) == 0) ++b;
+    EXPECT_FALSE(flip(c, L1::block + 8 * i + b)) << "block, copy " << c;
+  }
+
+  const auto c0 = Zk::make_circuit(others.size());
+  Dense<Field> g(others.size(), c0->ninputs);
+  for (size_t c = 0; c < others.size(); ++c) {
+    Zk::fill_public(plan.copies[others[c]], g, c, F);
+    Zk::fill_private(plan.copies[others[c]], g, c, F);
+  }
+  EXPECT_TRUE(Holds(*c0, g, F));
 }
 #endif
 

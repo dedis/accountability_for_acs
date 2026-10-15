@@ -7,6 +7,8 @@ pub mod cli;
 pub mod driver;
 pub mod gbench;
 pub mod paths;
+#[cfg(feature = "pq")]
+pub mod pq_credential;
 pub mod runner;
 
 /// The hash in the credential circuits and in Longfellow's proof system:

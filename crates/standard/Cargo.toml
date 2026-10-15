@@ -26,6 +26,14 @@ slh-dsa-f = ["slh-dsa", "revocation/slh-dsa-f"]
 name = "standard_signature"
 required-features = ["pq"]
 
+[[bin]]
+name = "standard_pq_prove_verify"
+required-features = ["pq"]
+
+[[bin]]
+name = "standard_pq_prove_verify_no_cft"
+required-features = ["pq"]
+
 [dependencies]
 anyhow.workspace = true
 bench-core.workspace = true

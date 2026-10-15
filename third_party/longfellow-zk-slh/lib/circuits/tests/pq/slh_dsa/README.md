@@ -47,6 +47,14 @@ circuit for all calls cannot be compiled. Instead:
   witness rows of the Ligero tableau take subfield randomness, and their
   opened elements are sent in 2 bytes instead of 32 or 48. `Verify` checks
   the proof after serializing and parsing it.
+- One-block copies (`Plan` with `one_block`, `Layout1`,
+  `OneBlockStepCircuit`; used by the credential proofs, `../credential`): a
+  call of one block whose output is read only through R (F and H, more than
+  98% of the copies) has a zero capacity input and no committed output
+  state, and
+  only its first W = 3n + 32 block bytes can be private: 1,053 (n = 24) or
+  1,309 (n = 32) private inputs instead of 3,421 or 3,485. The relation is
+  that of the step circuit. `SlhDsaZk` keeps one circuit for all copies.
 
 Changes to this copy of Longfellow outside this directory:
 
@@ -55,7 +63,7 @@ Changes to this copy of Longfellow outside this directory:
 | `zk/zk_common.h` | ZK constraints for circuits with copies: sumcheck rounds over the copy variables, the input binding over all copies, `EQ` on the copy bindings of the previous layer; extra linear constraints from the statement (`ExtraConstraints`), with index checks and a hash of all terms and right-hand sides for the transcript; `num_terms`, the exact size of the constraint list; `witness_index` rejects an input or copy out of range; `replay_sumcheck`, the transcript steps of the sumcheck without the constraints |
 | `zk/zk_prover.h`, `zk/zk_verifier.h` | Witness of all copies, extra constraints; the prover takes packed inputs (`commit` and `prove` on a `PackedLayer`; the `Dense` versions pack and forward) and reads the witness and the public inputs from them in place; the verifier takes `Dense` or packed public inputs; `prove` consumes the commitment (one proof per commit, so the pads are never used twice); the constraint list is allocated once, at its final size; the verifier checks the Merkle openings before it builds the constraint list |
 | `arrays/packed_layer.h` | `PackedLayer`: the wires of all copies, with each 0/1 wire as one bit per copy; filled per wire or per bit, read in the layout of `Dense` |
-| `sumcheck/prover_layers.h` | `prove_low_memory` (on packed inputs, which the caller keeps): every layer is stored as a `PackedLayer`, with each wire that is 0 or 1 in every copy as one bit per copy. `eval_layer` evaluates a layer from its packed input by output wire (terms counting-sorted by output wire) and packs each output wire at once, so no layer is ever unpacked at full size. `layer_packed` computes the first copy round from the packed wires (for two bit wires, the product of a pair of copies depends on four bits: the round adds `EQ` into 16 classes and multiplies once per class) and binds it into a buffer of half the copies, which holds the layer for the other rounds. Same proof. Evaluation selects (does not multiply by) a bit factor and does not multiply by a coefficient of one; same values. Packing, unpacking and evaluation do the same work and branches for every value of the bits, so the time depends only on the circuit (the first copy round indexes a 16-entry table, in L1, by the bits). One buffer for the sumcheck rounds of a layer |
+| `sumcheck/prover_layers.h` | `prove_low_memory` (on packed inputs, which the caller keeps): every layer is stored as a `PackedLayer`, with each wire that is 0 or 1 in every copy as one bit per copy. `eval_layer` evaluates a layer from its packed input by output wire (terms counting-sorted by output wire) and packs each output wire at once, so no layer is ever unpacked at full size. `layer_packed` computes the first copy round from the packed wires (for two bit wires, the product of a pair of copies depends on four bits: the round adds `EQ` into 16 classes and multiplies once per class), then (credential work, `../credential/README.md`) the second round from the packed wires too, and binds both into a buffer of a quarter of the copies, which holds the layer for the other rounds. Same proof. Evaluation selects (does not multiply by) a bit factor and does not multiply by a coefficient of one; same values. Packing, unpacking and evaluation do the same work and branches for every value of the bits, so the time depends only on the circuit (the first copy round indexes a 16-entry table, in L1, by the bits). One buffer for the sumcheck rounds of a layer |
 | `zk/zk_proof.h` | Serialization of the copy rounds; one encoding per proof: no trailing bytes, only the writer's run chunking, runs below the reader's limit |
 | `merkle/merkle_tree.h` | A compressed Merkle proof must not hold unused digests |
 | `ligero/ligero_prover.h` | No encoded tableau: each witness row keeps its input (random elements, and witnesses packed as bits when all are 0/1) and is encoded again when needed; the columns are hashed row by row (one hash state per column). The blinding and quadratic rows stay encoded. Each buffer is allocated once; every commit starts from a clear state. Packing does not branch on the bit values. Same proof |
@@ -114,6 +122,10 @@ $B/slh_dsa_zk_5_test --benchmark_filter=SLHDSA_SHAKE_256s --benchmark_min_time=1
 key, and its witness satisfies every link.
 
 ## Results
+
+These results predate the compute changes of the credential proofs
+(`../credential/README.md`, "Compute"), which also apply to `SlhDsaZk`
+(except the one-block copies); they were not measured again.
 
 One run of `slh_dsa_zk_test` per parameter set on one Mac (14 cores, 36 GB);
 the prover is single-threaded. Peak memory is the peak memory footprint of

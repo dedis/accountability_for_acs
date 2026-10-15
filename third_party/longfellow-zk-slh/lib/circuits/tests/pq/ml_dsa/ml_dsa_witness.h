@@ -218,8 +218,8 @@ class ml_dsa_witness {
       for (size_t j = 0; j < ml_dsa::N; ++j) {
         int32_t val =
             static_cast<int32_t>(f_.from_montgomery(z_poly[j]).limb_[0]);
-        if (val > (ml_dsa::Q / 2)) {
-          val -= ml_dsa::Q;
+        if (val > static_cast<int32_t>(ml_dsa::Q / 2)) {
+          val -= static_cast<int32_t>(ml_dsa::Q);
         }
 
         int32_t bound = Params::gamma_1 - Params::beta;

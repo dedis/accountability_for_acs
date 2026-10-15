@@ -208,6 +208,7 @@ class SlhDsaZk {
   template <class In>
   static void fill_public(const Copy& cp, In& w, size_t c,
                           const Field& f) {
+    check(!cp.one, "a copy of the general layout");
     size_t i = 0;
     set(w, i++, c, true, f);  // the constant one
     for (size_t k = 0; k < kRate; ++k) set_bits(w, i, c, cp.pub[k], 8, f);
@@ -232,15 +233,62 @@ class SlhDsaZk {
     set_bits(w, i, c, cp.acc_in, kAccBits, f);
     set_bits(w, i, c, cp.acc_out, kAccBits, f);
     for (size_t k = 0; k < P::n; ++k) set_bits(w, i, c, cp.r[k], 8, f);
-    for (size_t round = 0; round < 24; ++round) {
-      if (!sha3_slice_at(round)) continue;
-      for (size_t x = 0; x < 5; ++x) {
-        for (size_t y = 0; y < 5; ++y) {
-          set_bits(w, i, c, cp.bw.a_intermediate[round][x][y], 64, f);
-        }
-      }
+    // The one Keccak-f slice (round 23; Plan checks the slicing).
+    for (size_t x = 0; x < 5; ++x) {
+      for (size_t y = 0; y < 5; ++y) set_bits(w, i, c, cp.sout[x][y], 64, f);
     }
     check(i == L::npub + L::npriv, "private input count");
+  }
+
+  // fill_public() and fill_private() for a one-block copy (Layout1; not
+  // upstream).
+  template <class In>
+  static void fill_public1(const Copy& cp, In& w, size_t c, const Field& f) {
+    using L1 = Layout1<P::n>;
+    check(cp.one && !cp.cont, "a one-block copy");
+    size_t i = 0;
+    set(w, i++, c, true, f);  // the constant one
+    for (size_t k = 0; k < kRate; ++k) set_bits(w, i, c, cp.pub[k], 8, f);
+    for (size_t k = 0; k < L1::W; ++k) set_bits(w, i, c, cp.mask[k], 8, f);
+    set(w, i++, c, cp.swap_en, f);
+    set(w, i++, c, cp.is_wots, f);
+    set_bits(w, i, c, cp.j, 4, f);
+    set(w, i++, c, cp.is_acc, f);
+    check(i == L1::npub, "public input count");
+  }
+  template <class In>
+  static void fill_private1(const Copy& cp, In& w, size_t c, const Field& f) {
+    using L1 = Layout1<P::n>;
+    size_t i = L1::npub;
+    for (size_t k = 0; k < L1::W; ++k) set_bits(w, i, c, cp.block[k], 8, f);
+    set(w, i++, c, cp.swap, f);
+    set_bits(w, i, c, cp.digit, 4, f);
+    set_bits(w, i, c, cp.acc_in, kAccBits, f);
+    set_bits(w, i, c, cp.acc_out, kAccBits, f);
+    for (size_t k = 0; k < P::n; ++k) set_bits(w, i, c, cp.r[k], 8, f);
+    check(i == L1::npub + L1::npriv, "private input count");
+  }
+
+  // make_circuit() for NC one-block copies (not upstream).
+  static std::unique_ptr<Circuit<Field>> make_circuit1(size_t nc) {
+    using Step1 = OneBlockStepCircuit<LogicCircuit, P::n>;
+    const Field f;
+    QuadCircuit<Field> Q(f);
+    const CompilerBackend<Field> cbk(&Q);
+    const LogicCircuit lc(&cbk, f);
+    const Step1 step(lc);
+    typename Step1::Public u;
+    u.input(lc);
+    Q.private_input();
+    typename Step1::Private w;
+    w.input(lc);
+    Q.begin_full_field();
+    step.assert_step(u, w);
+    auto c = Q.mkcircuit(nc);
+    check(c->npub_in == Layout1<P::n>::npub &&
+              c->ninputs == Layout1<P::n>::npub + Layout1<P::n>::npriv,
+          "one-block input layout");
+    return c;
   }
 
   static std::unique_ptr<Circuit<Field>> make_circuit(size_t nc) {
@@ -277,26 +325,26 @@ class SlhDsaZk {
                 plan.sum_fixed.size());
     size_t row = 0;
     for (const auto& [x, y] : plan.eq) {
-      e.a.push_back(Llc{row, index(x), f.one()});
-      e.a.push_back(Llc{row, index(y), f.mone()});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(x)), false});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(y)), true});
       e.b.push_back(f.zero());
       ++row;
     }
     for (const auto& [x, value] : plan.fixed) {
-      e.a.push_back(Llc{row, index(x), f.one()});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(x)), false});
       e.b.push_back(value ? f.one() : f.zero());
       ++row;
     }
     for (const auto& [x, y, z] : plan.sum) {
-      e.a.push_back(Llc{row, index(x), f.one()});
-      e.a.push_back(Llc{row, index(y), f.mone()});
-      e.a.push_back(Llc{row, index(z), f.mone()});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(x)), false});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(y)), true});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(z)), true});
       e.b.push_back(f.zero());
       ++row;
     }
     for (const auto& [xy, value] : plan.sum_fixed) {
-      e.a.push_back(Llc{row, index(xy.first), f.one()});
-      e.a.push_back(Llc{row, index(xy.second), f.mone()});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(xy.first)), false});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(index(xy.second)), true});
       e.b.push_back(value ? f.one() : f.zero());
       ++row;
     }

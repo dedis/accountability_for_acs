@@ -2,7 +2,10 @@
 // (not upstream). It must produce the proof of the upstream prover, which
 // keeps the whole encoded tableau (ReferenceLigeroProver), byte for byte, and
 // the proof must verify. The prover under test first commits to another
-// witness (rows of the other kind), as a reused upstream prover can.
+// witness (rows of the other kind), as a reused upstream prover can. Both
+// leaf formats are checked: upstream, and the witness rows below the
+// subfield boundary hashed by subfield bytes (LigeroParam::nsub), for which
+// the verifier must reject an opened element outside the subfield.
 
 #include <cstddef>
 #include <cstdint>
@@ -51,7 +54,7 @@ struct FpSetup {
 enum Kind { kBits, kHalf, kRandom, kSparse };
 
 template <class S>
-void ExpectSameProof(const S& s, Kind kind, size_t nw, size_t nq) {
+void ExpectSameProof(const S& s, Kind kind, size_t nw, size_t nq, bool sub) {
   using Field = typename S::Field;
   using Elt = typename Field::Elt;
   using Llc = LigeroLinearConstraint<Field>;
@@ -110,23 +113,30 @@ void ExpectSameProof(const S& s, Kind kind, size_t nw, size_t nq) {
   }
   const LigeroHash hash{0x12, 0x34};
 
-  const LigeroParam<Field> param(nw, nq, 4, 32);
+  LigeroParam<Field> param(nw, nq, 4, 32);
   ASSERT_GT(param.nwrow, 2u);
+  if (sub) {
+    param.hash_subfield_rows(subfield_boundary);
+    if (kind != kRandom) ASSERT_GT(param.nsub, 0u);
+  }
 
   // The two provers with the same randomness and transcript.
   ReferenceLigeroProver<Field, typename S::RSFactory> ref(param);
   LigeroProver<Field, typename S::RSFactory> lp(param);
   {
+    // With subfield rows, the other witness is zero below the boundary.
     std::vector<Elt> other(nw);
     for (size_t i = 0; i < nw; ++i) {
-      other[i] = kind == kRandom ? F.zero() : gen.elt(F);
+      const bool zero = kind == kRandom || (sub && i < subfield_boundary);
+      other[i] = zero ? F.zero() : gen.elt(F);
     }
     for (size_t k = 0; k < nq; ++k) {
       other[nw - 1 - k] = F.mulf(other[k], other[k + 1]);
     }
     Transcript rng((uint8_t*)"other", 5), t((uint8_t*)"other", 5);
     LigeroCommitment<Field> com;
-    lp.commit(com, t, &other[0], 0, &lqc[0], s.rsf, rng, F);
+    lp.commit(com, t, &other[0], sub ? subfield_boundary : 0, &lqc[0], s.rsf,
+              rng, F);
   }
   Transcript rng_ref((uint8_t*)"rng", 3), rng_lp((uint8_t*)"rng", 3);
   Transcript t_ref((uint8_t*)"t", 1), t_lp((uint8_t*)"t", 1);
@@ -159,26 +169,41 @@ void ExpectSameProof(const S& s, Kind kind, size_t nw, size_t nq) {
               0);
   }
 
-  Transcript tv((uint8_t*)"t", 1);
-  LigeroVerifier<Field, typename S::RSFactory>::receive_commitment(com_lp, tv);
+  using Verifier = LigeroVerifier<Field, typename S::RSFactory>;
+  auto verify = [&](const LigeroProof<Field>& proof, const char** why) {
+    Transcript tv((uint8_t*)"t", 1);
+    Verifier::receive_commitment(com_lp, tv);
+    return Verifier::verify(why, param, com_lp, proof, tv, nl, a.size(), &a[0],
+                            hash, &rhs[0], &lqc[0], s.rsf, F, &row);
+  };
   const char* why = "";
-  EXPECT_TRUE((LigeroVerifier<Field, typename S::RSFactory>::verify(
-      &why, param, com_lp, got, tv, nl, a.size(), &a[0], hash, &rhs[0],
-      &lqc[0], s.rsf, F, &row)))
-      << why;
+  EXPECT_TRUE(verify(got, &why)) << why;
+
+  // An opened element of a subfield row outside the subfield.
+  Elt x = gen.elt(F);
+  if (param.nsub > 0 && !F.in_subfield(x)) {
+    LigeroProof<Field> bad = got;
+    bad.req_at(param.iw + param.nsub - 1, 1) = x;
+    EXPECT_FALSE(verify(bad, &why));
+    EXPECT_STREQ(why, "subfield_check failed");
+  }
 }
 
 TEST(LigeroProver, SameProofAsUpstreamGF2) {
   const GF2Setup s;
-  for (Kind kind : {kBits, kHalf, kRandom, kSparse}) {
-    ExpectSameProof(s, kind, 20000, 3);
+  for (bool sub : {false, true}) {
+    for (Kind kind : {kBits, kHalf, kRandom, kSparse}) {
+      ExpectSameProof(s, kind, 20000, 3, sub);
+    }
   }
 }
 
 TEST(LigeroProver, SameProofAsUpstreamFp) {
   const FpSetup s;
-  for (Kind kind : {kBits, kHalf, kRandom, kSparse}) {
-    ExpectSameProof(s, kind, 20000, 3);
+  for (bool sub : {false, true}) {
+    for (Kind kind : {kBits, kHalf, kRandom, kSparse}) {
+      ExpectSameProof(s, kind, 20000, 3, sub);
+    }
   }
 }
 

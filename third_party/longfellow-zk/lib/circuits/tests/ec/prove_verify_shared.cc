@@ -35,6 +35,7 @@
 #include "circuits/logic/bit_plucker_encoder.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#include "circuits/tests/ec/credential_leaf.h"
 #ifdef PROOFS_EC_SHAKE256
 #include "circuits/tests/ec/shake256_hash.h"
 #else
@@ -82,6 +83,9 @@ constexpr size_t kLeafDigestBytes = kSHAKE256DigestSize;
 constexpr size_t kLeafDigestBytes = 32;
 #endif
 constexpr size_t kLeafMsgBytes = kProveVerifyCredentialAttrs * kLeafDigestBytes;
+// The attributes the proof uses; their leaves are hashed in the circuit
+// (credential_leaf.h).
+constexpr std::array<size_t, 5> kUsedLeafSlots = {0, 1, 4, 5, 6};
 
 const P256Traits::EC& P256Traits::ec() { return p256; }
 const P256Traits::Field& P256Traits::field() { return p256_base; }
@@ -215,9 +219,11 @@ class CredentialCommitmentProveVerifyCircuit {
 
 #ifdef PROOFS_EC_SHAKE256
   using Hash = Shake256Hash<LogicCircuit>;
+  using Leaf = LeafHash<LogicCircuit>;
 #else
   using Flatsha =
       FlatSHA256Circuit<LogicCircuit, BitPlucker<LogicCircuit, kShaPluckerBits>>;
+  using Leaf = LeafHash<LogicCircuit, Flatsha>;
   using ShaBlockWitness = typename Flatsha::BlockWitness;
 #endif
   using v8 = typename LogicCircuit::v8;
@@ -317,6 +323,7 @@ class CredentialCommitmentProveVerifyCircuit {
 
     v8 attr_bytes[kNumAttrs][kDigestBytes];
     CredentialShaWitness credential_sha;
+    typename Leaf::Witness leaf[kUsedLeafSlots.size()];
 #ifndef PROOFS_EC_SHAKE256
     v256 credential_digest_bits;
 #endif
@@ -352,6 +359,7 @@ class CredentialCommitmentProveVerifyCircuit {
 #ifndef PROOFS_EC_SHAKE256
       credential_digest_bits = lc.template vinput<256>();
 #endif
+      for (auto& l : leaf) l.input(lc);
 
       r1_bits.input(lc);
       r2_bits.input(lc);
@@ -548,9 +556,22 @@ class CredentialCommitmentProveVerifyCircuit {
     lc_.assert_eq(repack_be32_from_bytes(w.attr_bytes[4]), birth_val);
     lc_.assert_eq(repack_be32_from_bytes(w.attr_bytes[5]), valid_from_val);
     lc_.assert_eq(repack_be32_from_bytes(w.attr_bytes[6]), valid_until_val);
+    // Each used attribute is the one in the leaf that the credential digest
+    // reads.
+    for (size_t k = 0; k < kUsedLeafSlots.size(); ++k) {
+      const size_t s = kUsedLeafSlots[k];
+#ifdef PROOFS_EC_SHAKE256
+      Leaf::assert_leaf(lc_, s, w.attr_bytes[s],
+                        &w.credential_sha.msg[s * kLeafDigestBytes], w.leaf[k]);
+#else
+      Leaf::assert_leaf(lc_, sha, s, w.attr_bytes[s],
+                        &w.credential_sha.sha_in[s * kLeafDigestBytes],
+                        w.leaf[k]);
+#endif
+    }
     auto mk_bitw = [&](const EltW bits_lsb[kProveVerifyTsBits], BitW out[kProveVerifyTsBits]) {
       for (size_t i = 0; i < kProveVerifyTsBits; ++i) {
-        out[i] = BitW(bits_lsb[kProveVerifyTsBits - 1 - i], lc_.f_);
+        out[i] = BitW(bits_lsb[i], lc_.f_);  // LSB first, as leq
       }
     };
     BitW b_birth[kProveVerifyTsBits], b_vf[kProveVerifyTsBits], b_vu[kProveVerifyTsBits], b_now[kProveVerifyTsBits],
@@ -726,6 +747,7 @@ struct BenchmarkContext {
   typename Field::Elt max_birth_pub;
 
   std::array<std::array<uint8_t, 32>, kProveVerifyCredentialAttrs> attr_values{};
+  std::array<LeafNative, kUsedLeafSlots.size()> leaf_native{};
   typename Field::Elt credential_digest_pub{};
 #ifdef PROOFS_EC_SHAKE256
   std::array<uint8_t, kLeafMsgBytes> credential_msg{};
@@ -852,6 +874,10 @@ struct BenchmarkContext {
     }
     for (size_t i = 0; i < kProveVerifyCredentialAttrs; ++i) {
       std::memcpy(attr_values[i].data(), &attr_msg[i * 32], 32);
+    }
+    for (size_t k = 0; k < kUsedLeafSlots.size(); ++k) {
+      leaf_native[k].compute(kUsedLeafSlots[k],
+                             attr_values[kUsedLeafSlots[k]].data());
     }
 
 #ifndef PROOFS_EC_SHAKE256
@@ -1194,6 +1220,7 @@ void fill_input(Dense<typename Traits::Field>& W, const BenchmarkContext<Traits>
     filler.push_back(bit ? Traits::field().one() : Traits::field().zero());
   }
 #endif
+  for (const auto& l : ctx.leaf_native) l.push(filler, Traits::field());
 
   for (size_t i = 0; i < EC::kBits; ++i) filler.push_back(ctx.r1_bits[i]);
   for (size_t i = 0; i < EC::kBits; ++i) filler.push_back(ctx.r2_bits[i]);

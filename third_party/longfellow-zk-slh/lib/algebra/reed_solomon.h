@@ -54,9 +54,12 @@ class ReedSolomon {
         degree_bound_(n - 1),
         m_(m),
         leading_constant_(m - n + 1),
-        binom_i_(n) {
+        binom_i_(n),
+        x_(n),
+        t_(m) {
     // inverses[i]: inverses[i] = 1/i from i = 1 to m-1 (inverses[0] = 0)
-    std::vector<Elt> inverses(m_);
+    std::vector<Elt>& inverses = inverses_;
+    inverses.resize(m_);
     AlgebraUtil<Field>::batch_inverse_arithmetic(m, &inverses[0], F);
     c_ = factory.make(n, m, &inverses[0]);
     leading_constant_[0] = F.one();
@@ -96,18 +99,28 @@ class ReedSolomon {
     size_t n = degree_bound_ + 1;  // number of points input
 
     // Define x[i] = (-1)^i \binom{n}{i} p(i) for i=0 through i=n
-    std::vector<Elt> x(n);
+    std::vector<Elt>& x = x_;  // not upstream: buffers kept, not thread safe
     for (size_t i = 0; i < n; i++) {
       x[i] = F.mulf(binom_i_[i], y[i]);
     }
 
-    std::vector<Elt> T(m_);
+    std::vector<Elt>& T = t_;
     c_->convolution(&x[0], &T[0]);
     // Multiply the leading constants by the convolution
     for (size_t i = n; i < m_; ++i) {
       y[i] = F.mulf(leading_constant_[i - degree_bound_], T[i]);
     }
   }
+
+  // The coefficients of interpolate() (not upstream): for n <= k < m it
+  // sets Y[k] = leading(k) sum_{j < n} binom(j) Y[j] inverse(k - j).
+  size_t n() const { return degree_bound_ + 1; }
+  size_t m() const { return m_; }
+  const Elt& binom(size_t j) const { return binom_i_[j]; }
+  const Elt& leading(size_t k) const {
+    return leading_constant_[k - degree_bound_];
+  }
+  const Elt& inverse(size_t i) const { return inverses_[i]; }
 
  private:
   const Field& f_;
@@ -127,6 +140,8 @@ class ReedSolomon {
   std::vector<Elt> leading_constant_;
   // (-1)^i (degree_bound_ choose i) from i=0 to i=degree_bound_
   std::vector<Elt> binom_i_;
+  std::vector<Elt> inverses_;  // 1/i for 0 < i < m (not upstream)
+  mutable std::vector<Elt> x_, t_;  // interpolate() buffers (not upstream)
 };
 
 template <class Field, class ConvolutionFactory>

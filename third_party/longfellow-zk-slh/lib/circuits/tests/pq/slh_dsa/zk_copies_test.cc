@@ -101,11 +101,8 @@ Extra make_links(const Circuit<Field>& circuit) {
   size_t row = 0;
   for (size_t c = 0; c + 1 < circuit.nc; ++c) {
     for (size_t b = 0; b < 8; ++b) {
-      e.a.push_back(Llc{row,
-                        ZkCommon<Field>::witness_index(circuit, kX + b, c + 1),
-                        F.one()});
-      e.a.push_back(Llc{row, ZkCommon<Field>::witness_index(circuit, kY + b, c),
-                        F.mone()});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(ZkCommon<Field>::witness_index(circuit, kX + b, c + 1)), false});
+      e.a.push_back(LigeroUnitTerm{uint32_t(row), uint32_t(ZkCommon<Field>::witness_index(circuit, kY + b, c)), true});
       e.b.push_back(F.zero());
       ++row;
     }
@@ -184,12 +181,12 @@ TEST(ZkCopies, RejectsOtherStatement) {
   // an extra row fixes bit 0 of X in copy 0, which is 1 (0xA5).
   Extra other = make_links(*r.circuit);
   other.b.push_back(F.one());
-  other.a.push_back(Llc{other.b.size() - 1, 0, F.one()});
+  other.a.push_back(LigeroUnitTerm{uint32_t(other.b.size() - 1), uint32_t(0), false});
   EXPECT_FALSE(verify(r, in, other));
 
   // Out-of-range rows or columns are rejected.
   Extra bad_row = make_links(*r.circuit);
-  bad_row.a.push_back(Llc{bad_row.b.size(), 0, F.one()});
+  bad_row.a.push_back(LigeroUnitTerm{uint32_t(bad_row.b.size()), uint32_t(0), false});
   EXPECT_FALSE(verify(r, in, bad_row));
   Extra bad_col = make_links(*r.circuit);
   bad_col.a[0].w = ZkCommon<Field>::num_witness(*r.circuit);

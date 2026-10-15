@@ -18,6 +18,8 @@
 #include <stddef.h>
 
 #include <array>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "algebra/blas.h"
@@ -28,6 +30,17 @@
 #include "util/crypto.h"
 
 namespace proofs {
+// The code I evaluates at chosen outputs alone (interpolate_at; not
+// upstream).
+template <class I, class Field, class = void>
+struct InterpolatesAt : std::false_type {};
+template <class I, class Field>
+struct InterpolatesAt<
+    I, Field,
+    std::void_t<decltype(std::declval<const I&>().interpolate_at(
+        nullptr, size_t(0), nullptr, nullptr, std::declval<const Field&>()))>>
+    : std::true_type {};
+
 template <class Field, class InterpolatorFactory>
 class LigeroVerifier {
   using Elt = typename Field::Elt;
@@ -47,7 +60,27 @@ class LigeroVerifier {
                      const LigeroHash& hash_of_llterm, const Elt b[/*nl*/],
                      const LigeroQuadraticConstraint lqc[/*nq*/],
                      const InterpolatorFactory& interpolator, const Field& F,
-                     const LigeroProductRow<Field>* row = nullptr) {
+                     const LigeroProductRow<Field>* row = nullptr,
+                     size_t nrowp = 1) {
+    const LigeroTermSpan<Field> span{llterm, nllterm, 0};
+    LigeroUnitSpan<Field> none;
+    none.row_offset = nl;
+    return verify(why, p, commitment, proof, ts, nl, &span, 1, none,
+                  hash_of_llterm, b, lqc, interpolator, F, row, nrowp);
+  }
+
+  // Not upstream: the linear terms as SPANS and UNITS, and the linear-test
+  // vector one row at a time (LigeroRows). B holds the right-hand sides of
+  // rows [0, UNITS.row_offset), UNITS.b those of the rows after.
+  static bool verify(const char** why, const LigeroParam<Field>& p,
+                     const LigeroCommitment<Field>& commitment,
+                     const LigeroProof<Field>& proof, Transcript& ts, size_t nl,
+                     const LigeroTermSpan<Field> spans[], size_t nspans,
+                     const LigeroUnitSpan<Field>& units,
+                     const LigeroHash& hash_of_llterm, const Elt b[],
+                     const LigeroQuadraticConstraint lqc[/*nq*/],
+                     const InterpolatorFactory& interpolator, const Field& F,
+                     const LigeroProductRow<Field>* row, size_t nrowp) {
     if (why == nullptr) {
       return false;
     }
@@ -62,6 +95,11 @@ class LigeroVerifier {
     const std::vector<Elt>& u_quad = ch.u_quad;
     const std::vector<size_t>& idx = ch.idx;
 
+    if (!subfield_check(p, proof, F)) {
+      *why = "subfield_check failed";
+      return false;
+    }
+
     if (!merkle_check(p, commitment, proof, &idx[0], F)) {
       *why = "merkle_check failed";
       return false;
@@ -74,19 +112,20 @@ class LigeroVerifier {
 
     {
       // linear check
-      std::vector<Elt> A(p.nwqrow * p.w);
-
-      LigeroCommon<Field>::inner_product_vector(&A[0], p, nl, nllterm, llterm,
-                                                &alphal[0], lqc, &alphaq[0], F,
-                                                row);
-
-      if (!dot_check(p, proof, &idx[0], &A[0], interpolator, F)) {
+      const LigeroRows<Field> rows(p, nl, spans, nspans, units, &alphal[0],
+                                   lqc, &alphaq[0], F, row, nrowp);
+      if (!dot_check(p, proof, &idx[0], rows, interpolator, F)) {
         *why = "dot_check failed";
         return false;
       }
 
       // check the putative value of the inner product
-      Elt want_dot = Blas<Field>::dot(nl, b, 1, &alphal[0], 1, F);
+      check(units.row_offset <= nl, "unit rows");
+      Elt want_dot = Blas<Field>::dot(units.row_offset, b, 1, &alphal[0], 1, F);
+      if (units.row_offset < nl) {
+        F.add(want_dot, Blas<Field>::dot(nl - units.row_offset, units.b, 1,
+                                         &alphal[units.row_offset], 1, F));
+      }
       Elt proof_dot = Blas<Field>::dot1(p.w, &proof.y_dot[p.r], 1, F);
       if (want_dot != proof_dot) {
         *why = "wrong dot product";
@@ -113,10 +152,15 @@ class LigeroVerifier {
                              size_t nl, const LigeroHash& hash_of_llterm,
                              const Field& F) {
     const Challenges ch(p, proof, ts, nl, hash_of_llterm, F);
-    return merkle_check(p, commitment, proof, &ch.idx[0], F);
+    return subfield_check(p, proof, F) &&
+           merkle_check(p, commitment, proof, &ch.idx[0], F);
   }
 
  private:
+  using Interpolator =
+      typename std::remove_reference<decltype(*std::declval<
+          const InterpolatorFactory&>().make(0, 0))>::type;
+
   // The verifier challenges, in transcript order.
   struct Challenges {
     std::vector<Elt> u_ldt;
@@ -170,13 +214,24 @@ class LigeroVerifier {
     Blas<Field>::gather(p.nreq, &yp[0], &yext[p.dblock], idx);
   }
 
+  // The opened elements of the rows hashed by subfield bytes lie in the
+  // subfield (LigeroParam::nsub; not upstream).
+  static bool subfield_check(const LigeroParam<Field>& p,
+                             const LigeroProof<Field>& proof, const Field& F) {
+    for (size_t i = p.iw; i < p.iw + p.nsub; ++i) {
+      for (size_t j = 0; j < p.nreq; ++j) {
+        if (!F.in_subfield(proof.req_at(i, j))) return false;
+      }
+    }
+    return true;
+  }
+
   static bool merkle_check(const LigeroParam<Field>& p,
                            const LigeroCommitment<Field>& commitment,
                            const LigeroProof<Field>& proof,
                            const size_t idx[/*nreq*/], const Field& F) {
     auto updhash = [&](size_t r, Hash& sha) {
-      LigeroCommon<Field>::column_hash(p.nrow, &proof.req_at(0, r), p.nreq, sha,
-                                       F);
+      LigeroCommon<Field>::column_hash(p, &proof.req_at(0, r), p.nreq, sha, F);
     };
 
     return MerkleCommitmentVerifier::verify(p.block_enc - p.dblock,
@@ -214,7 +269,8 @@ class LigeroVerifier {
 
   static bool dot_check(const LigeroParam<Field>& p,
                         const LigeroProof<Field>& proof,
-                        const size_t idx[/*nreq*/], const Elt A[/*nwqrow, w*/],
+                        const size_t idx[/*nreq*/],
+                        const LigeroRows<Field>& rows,
                         const InterpolatorFactory& interpolator,
                         const Field& F) {
     std::vector<Elt> yc(p.nreq);
@@ -227,11 +283,19 @@ class LigeroVerifier {
 
       std::vector<Elt> Aext(p.block_enc);
       std::vector<Elt> Areq(p.nreq);
+      // The opened columns, if the code evaluates there alone (not
+      // upstream; ComponentwiseReedSolomon::interpolate_at).
+      std::vector<size_t> pos(p.nreq);
+      for (size_t j = 0; j < p.nreq; ++j) pos[j] = p.dblock + idx[j];
 
       for (size_t i = 0; i < p.nwqrow; ++i) {
-        LigeroCommon<Field>::layout_Aext(&Aext[0], p, i, &A[0], F);
-        interpA->interpolate(&Aext[0]);
-        Blas<Field>::gather(p.nreq, &Areq[0], &Aext[p.dblock], idx);
+        LigeroCommon<Field>::layout_row(&Aext[0], p, i, rows, F);
+        if constexpr (InterpolatesAt<Interpolator, Field>::value) {
+          interpA->interpolate_at(&Aext[0], p.nreq, &pos[0], &Areq[0], F);
+        } else {
+          interpA->interpolate(&Aext[0]);
+          Blas<Field>::gather(p.nreq, &Areq[0], &Aext[p.dblock], idx);
+        }
 
         // Accumulate z += A[j] \otimes W[j].
         Blas<Field>::vaxpy(p.nreq, &yc[0], 1, &Areq[0], 1,

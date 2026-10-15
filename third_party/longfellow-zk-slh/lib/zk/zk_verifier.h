@@ -119,25 +119,24 @@ class ZkVerifier {
     using Llc = LigeroLinearConstraint<Field>;
     std::vector<Llc> A;
     std::vector<Elt> b;
-    A.reserve(ZkCommon<Field>::num_terms(circ_) +
-              (extra != nullptr ? extra->a.size() : 0));
-    b.reserve(circ_.nl + 1 + (extra != nullptr ? extra->b.size() : 0));
+    A.reserve(ZkCommon<Field>::num_terms(circ_));
+    b.reserve(circ_.nl + 1);
     LigeroProductRow<Field> row;
     size_t cn = ZkCommon<Field>::verifier_constraints(
         circ_, pub, zk.proof, /*aux=*/nullptr, A, b, row, tv, n_witness_, f_);
+    LigeroUnitSpan<Field> units;
+    units.row_offset = cn;
     if (extra != nullptr) {
-      for (const auto& e : extra->a) {
-        A.push_back(Llc{cn + e.c, e.w, e.k});
-      }
-      b.insert(b.end(), extra->b.begin(), extra->b.end());
+      units = {extra->a.data(), extra->a.size(), cn, extra->b.data()};
       cn += extra->b.size();
     }
     check(cn == nrows, "constraint rows");
 
     const char* why = "";
+    const LigeroTermSpan<Field> span{A.data(), A.size(), 0};
     bool ok = LigeroVerifier<Field, RSFactory>::verify(
-        &why, param_, zk.com, zk.com_proof, tv, cn, A.size(), &A[0], hash_of_A,
-        &b[0], &lqc_[0], rsf_, f_, &row);
+        &why, param_, zk.com, zk.com_proof, tv, cn, &span, 1, units, hash_of_A,
+        b.data(), &lqc_[0], rsf_, f_, &row, 1);
 
     log(INFO, "verify done: %s", why);
     return ok;

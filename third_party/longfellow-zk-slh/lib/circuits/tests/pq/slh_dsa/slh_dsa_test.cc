@@ -14,11 +14,9 @@ namespace proofs {
 namespace slh_dsa {
 namespace {
 
+// The native witness of PLAN satisfies its links.
 template <class P>
-void CheckExample(const Example& ex, size_t want_copies) {
-  const Plan<P> plan(ex.pk, ex.ctx, ex.msg, ex.sig);
-  EXPECT_TRUE(plan.native_ok);
-  EXPECT_EQ(plan.copies.size(), want_copies);
+void CheckLinks(const Plan<P>& plan) {
   for (const auto& [x, y] : plan.eq) {
     ASSERT_EQ(plan.value(x), plan.value(y))
         << "copy " << x.copy << " off " << x.off << " = copy " << y.copy
@@ -35,6 +33,24 @@ void CheckExample(const Example& ex, size_t want_copies) {
     ASSERT_EQ(plan.value(xy.first), plan.value(xy.second) != v)
         << "copy " << xy.first.copy << " off " << xy.first.off;
   }
+}
+
+template <class P>
+void CheckExample(const Example& ex, size_t want_copies) {
+  const Plan<P> plan(ex.pk, ex.ctx, ex.msg, ex.sig);
+  EXPECT_TRUE(plan.native_ok);
+  EXPECT_EQ(plan.copies.size(), want_copies);
+  CheckLinks(plan);
+
+  // The plan with one-block copies (not upstream): the same copies, links
+  // satisfied by its witness in both layouts.
+  const Plan<P> one(Val::konst(ex.pk.data(), P::n),
+                    Val::konst(ex.pk.data() + P::n, P::n), ex.ctx,
+                    Val::free(ex.msg.data(), ex.msg.size()), ex.sig,
+                    /*sig_public=*/false, /*one_block=*/true);
+  EXPECT_TRUE(one.native_ok);
+  EXPECT_EQ(one.copies.size(), want_copies);
+  CheckLinks(one);
 
   // Changed signature, message, context or key.
   for (size_t at : {size_t(0), P::n, ex.sig.size() / 2, ex.sig.size() - 1}) {

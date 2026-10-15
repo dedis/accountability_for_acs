@@ -93,3 +93,6 @@ add_subdirectory(circuits/tests/pq/ml_dsa)
 
 
 add_subdirectory(circuits/tests/pq/slh_dsa)
+
+# Post-quantum credential proofs (not upstream)
+add_subdirectory(circuits/tests/pq/credential)

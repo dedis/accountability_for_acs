@@ -453,10 +453,8 @@ void extra_rhs_bound(const S& s) {
   auto pub = fill(s.F, in, true);
   auto circuit = make_circuit(s.F, nc);
   Extra<S> e;
-  e.a.push_back(Llc{0, ZkCommon<Field>::witness_index(*circuit, 2, 0),
-                    s.F.one()});
-  e.a.push_back(Llc{1, ZkCommon<Field>::witness_index(*circuit, 2, 1),
-                    s.F.one()});
+  e.a.push_back(LigeroUnitTerm{uint32_t(0), uint32_t(ZkCommon<Field>::witness_index(*circuit, 2, 0)), false});
+  e.a.push_back(LigeroUnitTerm{uint32_t(1), uint32_t(ZkCommon<Field>::witness_index(*circuit, 2, 1)), false});
   e.b = {in.x[0], in.x[1]};
   auto r = malicious_prove(s, nc, *w, *w, &e);
   ASSERT_TRUE(verify(s, r, *pub, &e));

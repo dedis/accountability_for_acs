@@ -104,6 +104,28 @@ struct Layout {
   }
 };
 
+// Inputs of a one-block copy (not upstream): a call of one block whose
+// output is read only through R (F and H of FIPS 205; Plan with
+// ONE_BLOCK). Its capacity input is zero and its output state is not
+// committed, and only the bytes [0, W) of its block can be private
+// (PK.seed || ADRS || M, M of at most 2n bytes). Public: the constant one,
+// PUB (1088 bits), MASK of the first W bytes, SWAP_EN, IS_WOTS, J (4 bits),
+// IS_ACC. Private: the first W bytes of the block, SWAP, DIGIT, ACC_IN,
+// ACC_OUT, R.
+template <size_t kN>
+struct Layout1 {
+  static constexpr size_t window = Layout<kN>::window;
+  static constexpr size_t W = window + 2 * kN;
+  static constexpr size_t npub = 1 + 8 * kRate + 8 * W + 7;
+  static constexpr size_t block = 0;
+  static constexpr size_t swap = block + 8 * W;
+  static constexpr size_t digit = swap + 1;
+  static constexpr size_t acc_in = digit + 4;
+  static constexpr size_t acc_out = acc_in + kAccBits;
+  static constexpr size_t r = acc_out + kAccBits;
+  static constexpr size_t npriv = r + 8 * kN;
+};
+
 // A private input of one copy.
 struct Wire {
   uint32_t copy;
@@ -113,16 +135,26 @@ struct Wire {
   bool operator!=(const Wire& o) const { return !(*this == o); }
 };
 
-// One bit of a value, with its native value.
+// One bit of a value, with its native value. An external bit (EXT: an
+// index chosen by the caller) is a private input outside the copies of the
+// plan; the plan records its links to it in ext_eq and ext_sum. A fixed bit
+// is placed as a free bit (private) and constrained to its value: a public
+// signature, whose bytes the hash steps may swap or pass through, which
+// they do only for private bytes (not upstream).
 struct Bit {
-  enum Kind : uint8_t { kConst, kWire, kFree };
+  enum Kind : uint8_t { kConst, kWire, kFree, kExt, kFixed };
   Kind kind;
   bool value;
   Wire w;
+  uint32_t ext;
 
-  static Bit konst(bool v) { return Bit{kConst, v, Wire{0, 0}}; }
-  static Bit free(bool v) { return Bit{kFree, v, Wire{0, 0}}; }
-  static Bit wire(bool v, Wire w) { return Bit{kWire, v, w}; }
+  static Bit konst(bool v) { return Bit{kConst, v, Wire{0, 0}, 0}; }
+  static Bit free(bool v) { return Bit{kFree, v, Wire{0, 0}, 0}; }
+  static Bit wire(bool v, Wire w) { return Bit{kWire, v, w, 0}; }
+  static Bit external(bool v, uint32_t e) {
+    return Bit{kExt, v, Wire{0, 0}, e};
+  }
+  static Bit fixed_private(bool v) { return Bit{kFixed, v, Wire{0, 0}, 0}; }
 };
 
 // A byte string; bit b of byte i is BITS[8i + b].
@@ -152,10 +184,20 @@ struct Val {
     }
     return v;
   }
+  static Val fixed_private(const uint8_t* p, size_t len) {
+    Val v;
+    for (size_t i = 0; i < len; ++i) {
+      for (size_t b = 0; b < 8; ++b) {
+        v.bits.push_back(Bit::fixed_private((p[i] >> b) & 1));
+      }
+    }
+    return v;
+  }
 };
 
 // One Keccak-f call.
 struct Copy {
+  bool one = false;  // a one-block copy (Layout1), else Layout
   // Public inputs.
   uint8_t pub[kRate];
   uint8_t mask[kRate];
@@ -168,7 +210,9 @@ struct Copy {
   uint8_t digit;
   uint16_t acc_in, acc_out;
   uint8_t r[32];
-  Sha3Witness::BlockWitness bw;
+  // The Keccak-f witness: the state after round 23 (the only slice), lane
+  // (x, y) at [x][y]. Not upstream: the other rounds are not stored.
+  uint64_t sout[5][5];
 };
 
 // Options of one hash call.
@@ -195,6 +239,17 @@ enum AdrsType : uint32_t {
 template <class P>
 class Plan {
   using L = Layout<P::n>;
+  using L1 = Layout1<P::n>;
+
+  // The private offsets of the fields of a copy, by its layout.
+  struct Offsets {
+    size_t block, swap, digit, acc_in, acc_out, r;
+  };
+  static constexpr Offsets kGeneral{L::block,  L::swap,    L::digit,
+                                    L::acc_in, L::acc_out, L::r};
+  static constexpr Offsets kOne{L1::block,  L1::swap,    L1::digit,
+                                L1::acc_in, L1::acc_out, L1::r};
+  static const Offsets& at(const Copy& cp) { return cp.one ? kOne : kGeneral; }
 
  public:
   std::vector<Copy> copies;
@@ -202,6 +257,8 @@ class Plan {
   std::vector<std::pair<Wire, bool>> fixed;  // a == constant
   std::vector<std::array<Wire, 3>> sum;      // a == b xor c
   std::vector<std::pair<std::pair<Wire, Wire>, bool>> sum_fixed;  // a == b xor constant
+  std::vector<std::pair<Wire, uint32_t>> ext_eq;  // a == external
+  std::vector<std::pair<std::pair<Wire, Wire>, uint32_t>> ext_sum;  // a == b xor external
   bool native_ok = false;  // the native verification accepted
 
   // PK: 2n bytes. MSG: the message, private; only its length is public.
@@ -213,7 +270,24 @@ class Plan {
     check(slices == kSlices, "unexpected SHA3 slicing");
     // FIPS 205 Alg. 24: a wrong length does not verify (no copies).
     if (!valid_statement(pk, ctx) || sig.size() != P::sig_bytes) return;
-    verify(pk, ctx, msg, sig);
+    verify(Val::konst(pk.data(), P::n), Val::konst(pk.data() + P::n, P::n), ctx,
+           Val::free(msg.data(), msg.size()), sig);
+  }
+
+  // The key (PK.seed, PK.root) and the message as bits, which may be
+  // external (not upstream): a private key, or a message computed
+  // elsewhere in a larger proof. With SIG_PUBLIC, the signature bytes are
+  // fixed to their values by the statement (as C4), else free. With
+  // ONE_BLOCK, the calls of one block read only through R are one-block
+  // copies (Layout1).
+  Plan(const Val& seed, const Val& root, const std::vector<uint8_t>& ctx,
+       const Val& msg, const std::vector<uint8_t>& sig, bool sig_public,
+       bool one_block = false) {
+    check(seed.size() == P::n && root.size() == P::n, "key length");
+    if (ctx.size() > 255 || sig.size() != P::sig_bytes) return;
+    sig_public_ = sig_public;
+    one_block_ = one_block;
+    verify(seed, root, ctx, msg, sig);
   }
 
   // True if PK and CTX have valid lengths (FIPS 205 Alg. 24).
@@ -230,29 +304,30 @@ class Plan {
       const size_t lane = i / 64;
       return bool((lanes[lane / 5][lane % 5] >> (i % 64)) & 1);
     };
-    if (off < L::block) return (cp.cap[off / 64] >> (off % 64)) & 1;
-    if (off < L::swap) {
-      return (cp.block[(off - L::block) / 8] >> ((off - L::block) % 8)) & 1;
+    const Offsets& o = at(cp);
+    if (!cp.one && off < L::block) return (cp.cap[off / 64] >> (off % 64)) & 1;
+    if (off < o.swap) {
+      return (cp.block[(off - o.block) / 8] >> ((off - o.block) % 8)) & 1;
     }
-    if (off == L::swap) return cp.swap;
-    if (off < L::acc_in) return (cp.digit >> (off - L::digit)) & 1;
-    if (off < L::acc_out) return (cp.acc_in >> (off - L::acc_in)) & 1;
-    if (off < L::r) return (cp.acc_out >> (off - L::acc_out)) & 1;
-    if (off < L::bw) return (cp.r[(off - L::r) / 8] >> ((off - L::r) % 8)) & 1;
-    check(off < L::npriv, "private input offset");
-    const size_t slice = (off - L::bw) / kStateBits;
-    size_t round = 0, seen = 0;
-    for (; round < 24; ++round) {
-      if (sha3_slice_at(round) && seen++ == slice) break;
+    if (off == o.swap) return cp.swap;
+    if (off < o.acc_in) return (cp.digit >> (off - o.digit)) & 1;
+    if (off < o.acc_out) return (cp.acc_in >> (off - o.acc_in)) & 1;
+    if (off < o.r) return (cp.acc_out >> (off - o.acc_out)) & 1;
+    if (off < o.r + 8 * P::n) {
+      return (cp.r[(off - o.r) / 8] >> ((off - o.r) % 8)) & 1;
     }
-    return lane_bit(cp.bw.a_intermediate[round], (off - L::bw) % kStateBits);
+    check(!cp.one && off < L::npriv, "private input offset");
+    return lane_bit(cp.sout, (off - L::bw) % kStateBits);
   }
 
  private:
   Val seed_, root_;
+  bool sig_public_ = false;
+  bool one_block_ = false;
 
   // Wire references to the first NBYTES output bytes of copy C.
   Val output(size_t c, size_t nbytes) const {
+    check(!copies[c].one, "a one-block copy has no output state");
     Val v;
     for (size_t i = 0; i < nbytes; ++i) {
       for (size_t b = 0; b < 8; ++b) {
@@ -268,7 +343,7 @@ class Plan {
     Val v;
     for (size_t i = 0; i < 8 * P::n; ++i) {
       v.bits.push_back(Bit::wire((copies[c].r[i / 8] >> (i % 8)) & 1,
-                                 wire(c, L::r + i)));
+                                 wire(c, at(copies[c]).r + i)));
     }
     return v;
   }
@@ -281,22 +356,26 @@ class Plan {
     check(off >= L::sout && off < L::npriv, "only output bits are read back");
     const size_t i = off - L::sout;
     const size_t lane = i / 64;
-    return (cp.bw.a_intermediate[23][lane / 5][lane % 5] >> (i % 64)) & 1;
+    return (cp.sout[lane / 5][lane % 5] >> (i % 64)) & 1;
   }
 
   // Constrains private input OFF of copy C to BIT.
   void link(size_t c, size_t off, const Bit& bit) {
     if (bit.kind == Bit::kWire) {
       eq.push_back({wire(c, off), bit.w});
-    } else if (bit.kind == Bit::kConst) {
+    } else if (bit.kind == Bit::kConst || bit.kind == Bit::kFixed) {
       fixed.push_back({wire(c, off), bit.value});
+    } else if (bit.kind == Bit::kExt) {
+      ext_eq.push_back({wire(c, off), bit.ext});
     }
   }
 
   // Absorbs INPUT (SHAKE256-padded here) into one copy per block and
   // returns the index of the last copy. The windows of the first block are
-  // swapped when OPTS.swap is set.
-  size_t call(const Val& input, const CallOpts& opts) {
+  // swapped when OPTS.swap is set. With RESULT_ONLY (the output is read
+  // through R alone), a call of one block of a ONE_BLOCK plan is a
+  // one-block copy.
+  size_t call(const Val& input, const CallOpts& opts, bool result_only) {
     const size_t len = input.size();
     const size_t nblocks = len / kRate + 1;
     check(nblocks == 1 || (!opts.swap_en && !opts.is_wots && !opts.is_acc),
@@ -306,6 +385,8 @@ class Plan {
       last = copies.size();
       copies.push_back(Copy{});
       Copy& cp = copies.back();
+      cp.one = one_block_ && result_only && nblocks == 1;
+      const Offsets& o = at(cp);
       cp.cont = blk > 0;
       cp.swap_en = opts.swap_en;
       cp.is_wots = opts.is_wots;
@@ -323,40 +404,43 @@ class Plan {
                                 (i == kRate - 1 ? 0x80 : 0);
             bit = Bit::konst((pad >> b) & 1);
           }
-          const Wire w = wire(last, L::block + 8 * i + b);
+          const Wire w = wire(last, o.block + 8 * i + b);
           if (cp.cont) {
             // Previous output XOR data, all private.
             const Wire prev = wire(last - 1, L::sout_bit(i, b));
             const bool prev_value = bit_of(copies[last - 1], prev.off);
             cp.mask[i] |= uint8_t(1) << b;
             cp.block[i] |= uint8_t(prev_value ^ bit.value) << b;
-            if (bit.kind == Bit::kConst) {
+            if (bit.kind == Bit::kConst || bit.kind == Bit::kFixed) {
               sum_fixed.push_back({{w, prev}, bit.value});
             } else if (bit.kind == Bit::kWire) {
               sum.push_back({w, prev, bit.w});
+            } else if (bit.kind == Bit::kExt) {
+              ext_sum.push_back({{w, prev}, bit.ext});
             }
           } else if (bit.kind == Bit::kConst) {
             cp.pub[i] |= uint8_t(bit.value) << b;
           } else {
+            check(!cp.one || i < L1::W, "one-block copy: private byte");
             cp.mask[i] |= uint8_t(1) << b;
             cp.block[i] |= uint8_t(bit.value) << b;
-            link(last, L::block + 8 * i + b, bit);
+            link(last, o.block + 8 * i + b, bit);
           }
         }
       }
 
       cp.swap = opts.swap.value;
-      if (opts.swap_en) link(last, L::swap, opts.swap);
+      if (opts.swap_en) link(last, o.swap, opts.swap);
       if (opts.is_wots) {
         for (size_t b = 0; b < 4; ++b) {
           cp.digit |= uint8_t(opts.digit[b].value) << b;
-          link(last, L::digit + b, opts.digit[b]);
+          link(last, o.digit + b, opts.digit[b]);
         }
       }
       if (opts.is_acc) {
         for (size_t b = 0; b < kAccBits; ++b) {
           cp.acc_in |= uint16_t(opts.acc_in[b].value) << b;
-          link(last, L::acc_in + b, opts.acc_in[b]);
+          link(last, o.acc_in + b, opts.acc_in[b]);
         }
         cp.acc_out = cp.acc_in + (15 - cp.digit);
       }
@@ -369,7 +453,7 @@ class Plan {
         for (size_t j = 0; j < kCapLanes; ++j) {
           const size_t lane = kRateLanes + j;
           const size_t x = lane % 5, y = lane / 5;
-          cp.cap[j] = prev.bw.a_intermediate[23][x][y];
+          cp.cap[j] = prev.sout[x][y];
           A[x][y] = cp.cap[j];
           for (size_t b = 0; b < 64; ++b) {
             eq.push_back({wire(last, L::cap + 64 * j + b),
@@ -390,7 +474,9 @@ class Plan {
         const size_t lane = i / 8;
         A[lane % 5][lane / 5] ^= uint64_t(byte) << (8 * (i % 8));
       }
-      Sha3Witness::compute_witness_block(A, cp.bw);
+      Sha3Witness::BlockWitness bw;
+      Sha3Witness::compute_witness_block(A, bw);
+      std::memcpy(cp.sout, bw.a_intermediate[23], sizeof(cp.sout));
 
       const bool active = !cp.is_wots || cp.j >= cp.digit;
       for (size_t i = 0; i < P::n; ++i) {
@@ -447,19 +533,20 @@ class Plan {
 
   // F or H: PK.seed || ADRS || M.
   size_t hash(const Val& adrs, const Val& m, const CallOpts& opts) {
-    return call(cat({&seed_, &adrs, &m}), opts);
+    return call(cat({&seed_, &adrs, &m}), opts, /*result_only=*/true);
   }
 
   // Algorithm 20 (slh_verify_internal) on M' = 0x00 || |ctx| || ctx || M.
-  void verify(const std::vector<uint8_t>& pk, const std::vector<uint8_t>& ctx,
-              const std::vector<uint8_t>& msg,
+  void verify(const Val& seed, const Val& root,
+              const std::vector<uint8_t>& ctx, const Val& msg_v,
               const std::vector<uint8_t>& sig) {
     constexpr size_t n = P::n, a = P::a, k = P::k, hp = P::hp;
-    seed_ = Val::konst(pk.data(), n);
-    root_ = Val::konst(pk.data() + n, n);
+    seed_ = seed;
+    root_ = root;
     size_t at = 0;  // signature cursor
     auto take = [&](size_t len) {
-      Val v = Val::free(sig.data() + at, len);
+      Val v = sig_public_ ? Val::fixed_private(sig.data() + at, len)
+                          : Val::free(sig.data() + at, len);
       at += len;
       return v;
     };
@@ -469,8 +556,8 @@ class Plan {
     std::vector<uint8_t> head = {0, static_cast<uint8_t>(ctx.size())};
     head.insert(head.end(), ctx.begin(), ctx.end());
     const Val head_v = Val::konst(head.data(), head.size());
-    const Val msg_v = Val::free(msg.data(), msg.size());
-    const size_t hmsg = call(cat({&R, &seed_, &root_, &head_v, &msg_v}), {});
+    const size_t hmsg =
+        call(cat({&R, &seed_, &root_, &head_v, &msg_v}), {}, false);
     const Val digest = output(hmsg, P::m);
 
     // Split the digest (Algorithm 20, steps 7-10).
@@ -544,8 +631,14 @@ class Plan {
     // node == PK.root
     native_ok = true;
     for (size_t t = 0; t < 8 * n; ++t) {
-      fixed.push_back({node.bits[t].w, root_.bits[t].value});
-      native_ok &= node.bits[t].value == root_.bits[t].value;
+      const Bit& r = root_.bits[t];
+      check(r.kind == Bit::kConst || r.kind == Bit::kExt, "PK.root bits");
+      if (r.kind == Bit::kExt) {
+        ext_eq.push_back({node.bits[t].w, r.ext});
+      } else {
+        fixed.push_back({node.bits[t].w, r.value});
+      }
+      native_ok &= node.bits[t].value == r.value;
     }
   }
 
@@ -594,7 +687,7 @@ class Plan {
         if (o.is_acc) {
           for (size_t b = 0; b < kAccBits; ++b) {
             acc[b] = Bit::wire((copies[c].acc_out >> b) & 1,
-                               wire(c, L::acc_out + b));
+                               wire(c, at(copies[c]).acc_out + b));
           }
         }
       }

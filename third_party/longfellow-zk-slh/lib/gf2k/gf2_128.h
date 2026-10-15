@@ -23,6 +23,7 @@
 #include <functional>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "gf2k/gf2poly.h"
 #include "gf2k/sysdep.h"
@@ -111,6 +112,19 @@ class GF2_128 {
 
     // Reduce the basis to row-echelon form
     beta_ref();
+
+    // The table of solve() (not upstream): the solutions of each byte value
+    // at each byte position.
+    solved_.resize(kBytes * 256);
+    for (size_t k = 0; k < kBytes; ++k) {
+      for (uint64_t v = 0; v < 256; ++v) {
+        std::array<uint64_t, 2> a = {0, 0};
+        a[k / 8] = v << (8 * (k % 8));
+        const auto eu = solve_by_elimination(of_scalar_field(a));
+        const std::array<uint64_t, 2> r = eu.first.u64();
+        solved_[256 * k + v] = Solved{{r[0], r[1]}, eu.second};
+      }
+    }
 
     // Evaluation points.  We use g^i for these as well
     poly_evaluation_points_[0] = zero();
@@ -233,6 +247,40 @@ class GF2_128 {
   void add(Elt& a, const Elt& y) const { a = addf(a, y); }
   void sub(Elt& a, const Elt& y) const { a = subf(a, y); }
   void mul(Elt& a, const Elt& y) const { a = mulf(a, y); }
+
+  // Products without reduction (not upstream): W.t[0] + x^64 W.t[1] +
+  // x^128 W.t[2]. Their sums are coordinate-wise XORs; reduce_wide()
+  // gives the element, the same as mulf() for one product.
+  struct Wide {
+    N t[3];
+  };
+  static Wide zero_wide() {
+    const N z = gf2_128_of_uint64x2({0, 0});
+    return Wide{{z, z, z}};
+  }
+  static Wide mul_wide(const Elt& x, const Elt& y) {
+    Wide w;
+    gf2_128_mul_wide(x.n, y.n, w.t);
+    return w;
+  }
+  static Wide add_wide(const Wide& a, const Wide& b) {
+    return Wide{{gf2_128_add(a.t[0], b.t[0]), gf2_128_add(a.t[1], b.t[1]),
+                 gf2_128_add(a.t[2], b.t[2])}};
+  }
+  static Elt reduce_wide(const Wide& w) { return Elt{gf2_128_reduce_wide(w.t)}; }
+  // x^K X for K < 128.
+  static Wide shift_wide(const Elt& x, size_t k) {
+    const std::array<uint64_t, 2> a = uint64x2_of_gf2_128(x.n);
+    uint64_t s[4] = {0, 0, 0, 0};  // a << k, by 64-bit words
+    const size_t w = k / 64, b = k % 64;
+    for (size_t i = 0; i < 2; ++i) {
+      s[i + w] ^= a[i] << b;
+      if (b != 0) s[i + w + 1] ^= a[i] >> (64 - b);
+    }
+    const N zero = gf2_128_of_uint64x2({0, 0});
+    return Wide{{gf2_128_of_uint64x2({s[0], s[1]}), zero,
+                 gf2_128_of_uint64x2({s[2], s[3]})}};
+  }
   void neg(Elt& a) const { /* noop */ }
   void invert(Elt& a) const { a = invertf(a); }
 
@@ -350,6 +398,14 @@ class GF2_128 {
   // This array is in principle redundant, since one can always
   // reconstruct it from u_, but we cache it for efficiency.
   size_t ldnz_[kSubFieldBits];
+
+  // solve_by_elimination() of byte value V at byte position K, at
+  // 256 K + V (not upstream).
+  struct Solved {
+    uint64_t r[2];
+    uint64_t u;
+  };
+  std::vector<Solved> solved_;
 
   Elt poly_evaluation_points_[kNPolyEvaluationPoints];
   Elt newton_denominators_[kNPolyEvaluationPoints][kNPolyEvaluationPoints];
@@ -483,7 +539,24 @@ class GF2_128 {
     check(rnk == kSubFieldBits, "rnk == kSubFieldBits");
   }
 
+  // solve() is GF(2)-linear in the 128 bits of E (an elimination with
+  // fixed pivots), so it is the XOR of the solutions of the 16 bytes of E,
+  // read from a table (not upstream): 16 loads instead of 16 dependent
+  // steps.
   std::pair<N1, uint64_t> solve(const Elt& e) const {
+    const std::array<uint64_t, 2> a = uint64x2_of_gf2_128(e.n);
+    std::array<uint64_t, 2> r = {0, 0};
+    uint64_t u = 0;
+    for (size_t k = 0; k < kBytes; ++k) {
+      const Solved& t = solved_[256 * k + ((a[k / 8] >> (8 * (k % 8))) & 0xff)];
+      r[0] ^= t.r[0];
+      r[1] ^= t.r[1];
+      u ^= t.u;
+    }
+    return std::pair(N1(r), u);
+  }
+
+  std::pair<N1, uint64_t> solve_by_elimination(const Elt& e) const {
     uint64_t u = 0;
     N1 ue = e.unpack();
     for (size_t rnk = 0; rnk < kSubFieldBits; ++rnk) {

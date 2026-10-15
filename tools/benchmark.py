@@ -18,7 +18,9 @@ tools/build.py; a choice other than ml-dsa at level 3 appends it to the
 folders (e.g. -pq-slh-dsa-f-5). --classical builds without pq (SHA-256,
 Poseidon, EdDSA) and writes to the folders without the suffix.
 
-  python3 tools/benchmark.py                      # everything, ~3.5 h on 2 CPUs
+  python3 tools/benchmark.py                      # everything (3.5 h on 2 CPUs
+                                                  # before the pq credential
+                                                  # benchmarks were added)
   python3 tools/benchmark.py --only zk-friendly --skip-build
   BENCH_N=3 python3 tools/benchmark.py            # BENCH_* and friends pass through
 
@@ -64,7 +66,8 @@ PASS_ENV = (
 BENCHES = ("prove_verify", "prove_verify_no_cft", "prove_verify_revocation",
            "merkle_vs_flat", "communication_size")
 PROVE_BENCHES = BENCHES[:3]
-STANDARD_BENCHES = BENCHES + ("signature",)  # pq build only
+# pq build only: the signature proof and the post-quantum credential proofs.
+STANDARD_BENCHES = BENCHES + ("signature", "pq_prove_verify", "pq_prove_verify_no_cft")
 
 
 def run(cmd: list[str], **kwargs) -> int:
@@ -200,6 +203,10 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n", 2)[2])
     parser.add_argument("--only", action="append", choices=STACKS,
                         help="run only this stack (repeatable)")
+    parser.add_argument("--bench", action="append",
+                        choices=sorted(set(STANDARD_BENCHES)),
+                        help="run only this benchmark of the Docker stacks "
+                             "(repeatable)")
     parser.add_argument("--skip-build", action="store_true", help="reuse the Docker images")
     parser.add_argument("--cpus", default="2", help="Docker CPU limit (default 2)")
     parser.add_argument("--cpus-full", default="12",
@@ -245,8 +252,11 @@ def main() -> None:
     for stack in docker_stacks:
         dest = results / stack / f"local-{args.cpus}cpu{suffix}"
         benches = STANDARD_BENCHES if stack == "standard" and not args.classical else BENCHES
-        runs.append((dest, docker_suite(stack, benches, limits, dest)))
-    if "zk-friendly" in stacks and args.cpus_full != "0":
+        if args.bench:
+            benches = tuple(b for b in benches if b in args.bench)
+        if benches:
+            runs.append((dest, docker_suite(stack, benches, limits, dest)))
+    if "zk-friendly" in stacks and args.cpus_full != "0" and not args.bench:
         dest = results / "zk-friendly" / f"local-{args.cpus_full}cpu{suffix}"
         full = ["--cpus", args.cpus_full, *limits[2:]]
         runs.append((dest, docker_suite("zk-friendly", PROVE_BENCHES, full, dest)))

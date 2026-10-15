@@ -15,6 +15,7 @@
 #ifndef PRIVACY_PROOFS_ZK_LIB_ZK_ZK_COMMON_H_
 #define PRIVACY_PROOFS_ZK_LIB_ZK_ZK_COMMON_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -49,12 +50,12 @@ class ZkCommon {
 
  public:
   // Extra linear constraints A w = b on the committed private witness,
-  // supplied by the statement (not upstream). Row indices start at 0;
-  // ZkProver and ZkVerifier append the rows after the sumcheck constraints
-  // and bind every term and right-hand side into the Fiat-Shamir transcript
-  // (extra_hash).
+  // supplied by the statement (not upstream). Every coefficient is +1 or -1
+  // (LigeroUnitTerm, 12 bytes). Row indices start at 0; ZkProver and
+  // ZkVerifier append the rows after the sumcheck constraints and bind every
+  // term and right-hand side into the Fiat-Shamir transcript (extra_hash).
   struct ExtraConstraints {
-    std::vector<Llc> a;
+    std::vector<LigeroUnitTerm> a;
     std::vector<Elt> b;
   };
 
@@ -70,22 +71,33 @@ class ZkCommon {
   }
 
   // Hash of every term and right-hand side of E, written to the transcript
-  // in place of Ligero's hash of the constraint matrix.
+  // in place of Ligero's hash of the constraint matrix. The bytes are
+  // hashed 4 KB at a time.
   static LigeroHash extra_hash(const ExtraConstraints& e, const Field& F) {
     Hash h;
-    uint8_t buf[Field::kBytes];
     h.Update8(e.a.size());
     h.Update8(e.b.size());
+    uint8_t buf[4096];
+    size_t len = 0;
+    auto put = [&](size_t n) {
+      if (len + n > sizeof(buf)) {
+        h.Update(buf, len);
+        len = 0;
+      }
+      len += n;
+      return &buf[len - n];
+    };
+    auto put8 = [&](uint64_t x) {
+      uint8_t* p = put(8);
+      for (size_t i = 0; i < 8; ++i, x >>= 8) p[i] = x & 0xff;
+    };
     for (const auto& t : e.a) {
-      h.Update8(t.c);
-      h.Update8(t.w);
-      F.to_bytes_field(buf, t.k);
-      h.Update(buf, sizeof(buf));
+      put8(t.c);
+      put8(t.w);
+      *put(1) = t.neg;
     }
-    for (const auto& x : e.b) {
-      F.to_bytes_field(buf, x);
-      h.Update(buf, sizeof(buf));
-    }
+    for (const auto& x : e.b) F.to_bytes_field(put(Field::kBytes), x);
+    h.Update(buf, len);
     LigeroHash r;
     h.DigestData(r.bytes);
     return r;
@@ -123,14 +135,15 @@ class ZkCommon {
   // pi: witness index for first pad element in a larger commitment.
   // ROW receives the witness terms of the input binding as a product row
   // (not upstream): coefficient (eq0[i] + alpha eq1[i]) * EQ[Q, c] for
-  // private input i of copy c.
+  // private input i of copy c. FIRST: witness index of the first private
+  // input of CIRCUIT in a larger commitment (zk/zk_multi.h).
   template <class Pub>
   static size_t verifier_constraints(
       const Circuit<Field>& circuit, const Pub& pub,
       const Proof<Field>& proof, const ProofAux<Field>* aux,
       std::vector<Llc>& a, std::vector<typename Field::Elt>& b,
       LigeroProductRow<Field>& row, Transcript& tsv, size_t pi,
-      const Field& F) {
+      const Field& F, size_t first = 0) {
     const size_t ninp = circuit.ninputs, npub = circuit.npub_in;
 
     Challenge<Field> ch(circuit.nl);
@@ -222,7 +235,7 @@ class ZkCommon {
     Elt got = F.addf(plr->wc[0], F.mulf(alpha, plr->wc[1]));
 
     ci = input_constraint(cla, circuit, pub, npub, ninp, pi, got, alpha, a, b,
-                          row, ci, F);
+                          row, ci, F, first);
     check(a.size() - a0 == num_terms(circuit), "num_terms is wrong");
     return ci;
   }
@@ -287,9 +300,28 @@ class ZkCommon {
                                               const Field& F) {
     ts.write(circuit.id, sizeof(circuit.id));
 
-    // Public inputs of every copy, in the Dense layout (copies adjacent).
-    for (size_t i = 0; i < circuit.npub_in * circuit.nc; ++i) {
-      ts.write(pub.at(i), F);
+    // Public inputs of every copy, wire by wire (not upstream): a wire that
+    // is 0 or 1 in every copy as a byte string of its bits (copy c at bit
+    // c % 8 of byte c / 8), any other wire as its elements (tagged as field
+    // elements, unlike the byte string). The encoding is injective, as
+    // upstream's (every element), with 8 (1 + Field::kBytes) times fewer
+    // bytes for bits.
+    const size_t nc = circuit.nc;
+    std::vector<uint8_t> bits((nc + 7) / 8);
+    for (size_t w = 0; w < circuit.npub_in; ++w) {
+      std::fill(bits.begin(), bits.end(), 0);
+      bool is_bits = true;
+      for (size_t c = 0; c < nc; ++c) {
+        const Elt x = pub.at(w * nc + c);
+        const bool one = x == F.one();
+        is_bits &= one || x == F.zero();
+        bits[c / 8] |= static_cast<uint8_t>(one) << (c % 8);
+      }
+      if (is_bits) {
+        ts.write(bits.data(), bits.size());
+      } else {
+        ts.write_each(nc, [&](size_t c) { return pub.at(w * nc + c); }, F);
+      }
     }
 
     // Outputs pro-forma:
@@ -563,15 +595,16 @@ class ZkCommon {
                                  Elt alpha, std::vector<Llc>& a,
                                  std::vector<Elt>& b,
                                  LigeroProductRow<Field>& row, size_t ci,
-                                 const Field& F) {
+                                 const Field& F, size_t first) {
     const corner_t nc = circuit.nc;
     Eqs<Field> eqc(circuit.logc, nc, cla.q, F);
     Eqs<Field> eq0(cla.logv, num_inputs, cla.g[0], F);
     Eqs<Field> eq1(cla.logv, num_inputs, cla.g[1], F);
     Elt pub_binding = F.zero();
-    // Witness i of copy c is at (i - pub_inputs) * nc + c (witness_index).
+    // Witness i of copy c is at FIRST + (i - pub_inputs) * nc + c
+    // (witness_index).
     row.c = ci;
-    row.first = 0;
+    row.first = first;
     row.u.resize(num_inputs - pub_inputs);
     row.v.resize(nc);
     for (corner_t c = 0; c < nc; ++c) row.v[c] = eqc.at(c);

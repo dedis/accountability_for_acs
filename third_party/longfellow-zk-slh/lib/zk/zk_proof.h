@@ -115,14 +115,25 @@ struct ZkProof {
 
   void write_sc_proof(const Proof<Field> &pr, std::vector<uint8_t> &buf,
                       const Field &F) const {
+    write_sc(c, pr, buf, F);
+  }
+
+  bool read_sc_proof(Proof<Field> &pr, ReadBuffer &buf, const Field &F) {
+    return read_sc(c, pr, buf, F);
+  }
+
+  // The serialization helpers below are static and public (not upstream),
+  // for proofs of several circuits over one commitment (zk/zk_multi.h).
+  static void write_sc(const Circuit<Field> &circ, const Proof<Field> &pr,
+                       std::vector<uint8_t> &buf, const Field &F) {
     for (size_t i = 0; i < pr.l.size(); ++i) {
       // Copy rounds (not upstream): p(1) is implied, as below.
-      for (size_t ci = 0; ci < c.logc; ++ci) {
+      for (size_t ci = 0; ci < circ.logc; ++ci) {
         for (size_t k = 0; k < 4; ++k) {
           if (k != 1) write_elt(pr.l[i].cp[ci].t_[k], buf, F);
         }
       }
-      for (size_t wi = 0; wi < c.l[i].logw; ++wi) {
+      for (size_t wi = 0; wi < circ.l[i].logw; ++wi) {
         for (size_t k = 0; k < 3; ++k) {
           // Optimization: do not send p(1) as it is implied by constraints.
           if (k != 1) {
@@ -136,13 +147,13 @@ struct ZkProof {
     }
   }
 
-  void write_com(const LigeroCommitment<Field> &com0, std::vector<uint8_t> &buf,
-                 const Field &F) const {
+  static void write_com(const LigeroCommitment<Field> &com0,
+                        std::vector<uint8_t> &buf, const Field &F) {
     buf.insert(buf.end(), com0.root.data, com0.root.data + Digest::kLength);
   }
 
-  void write_com_proof(const LigeroProof<Field> &pr, std::vector<uint8_t> &buf,
-                       const Field &F) const {
+  static void write_com_proof(const LigeroProof<Field> &pr,
+                              std::vector<uint8_t> &buf, const Field &F) {
     for (size_t i = 0; i < pr.block; ++i) {
       write_elt(pr.y_ldt[i], buf, F);
     }
@@ -191,45 +202,46 @@ struct ZkProof {
     }
   }
 
- private:
-  void write_elt(const Elt &x, std::vector<uint8_t> &buf,
-                 const Field &F) const {
+  static void write_elt(const Elt &x, std::vector<uint8_t> &buf,
+                        const Field &F) {
     uint8_t tmp[Field::kBytes];
     F.to_bytes_field(tmp, x);
     buf.insert(buf.end(), tmp, tmp + Field::kBytes);
   }
 
-  void write_subfield_elt(const Elt &x, std::vector<uint8_t> &buf,
-                          const Field &F) const {
+  static void write_subfield_elt(const Elt &x, std::vector<uint8_t> &buf,
+                                 const Field &F) {
     uint8_t tmp[Field::kSubFieldBytes];
     F.to_bytes_subfield(tmp, x);
     buf.insert(buf.end(), tmp, tmp + Field::kSubFieldBytes);
   }
 
-  void write_digest(const Digest &x, std::vector<uint8_t> &buf) const {
+  static void write_digest(const Digest &x, std::vector<uint8_t> &buf) {
     buf.insert(buf.end(), x.data, x.data + Digest::kLength);
   }
 
-  void write_nonce(const MerkleNonce &x, std::vector<uint8_t> &buf) const {
+  static void write_nonce(const MerkleNonce &x, std::vector<uint8_t> &buf) {
     buf.insert(buf.end(), x.bytes, x.bytes + MerkleNonce::kLength);
   }
 
   // Assumption is that all of the sizes of arrays that are part of proofs
   // fit into 4 bytes, and can thus work on 32-b machines.
-  void write_size(size_t g, std::vector<uint8_t> &buf) const {
+  static void write_size(size_t g, std::vector<uint8_t> &buf) {
     for (size_t i = 0; i < 4; ++i) {
       buf.push_back(static_cast<uint8_t>(g & 0xff));
       g >>= 8;
     }
   }
 
-  bool read_sc_proof(Proof<Field> &pr, ReadBuffer &buf, const Field &F) {
+  static bool read_sc(const Circuit<Field> &circ, Proof<Field> &pr,
+                      ReadBuffer &buf, const Field &F) {
     for (size_t i = 0; i < pr.l.size(); ++i) {
       size_t needed =
-          (c.logc * (4 - 1) + c.l[i].logw * (3 - 1) * 2 + 2) * Field::kBytes;
+          (circ.logc * (4 - 1) + circ.l[i].logw * (3 - 1) * 2 + 2) *
+          Field::kBytes;
       if (!buf.have(needed)) return false;
       // Copy rounds (not upstream).
-      for (size_t ci = 0; ci < c.logc; ++ci) {
+      for (size_t ci = 0; ci < circ.logc; ++ci) {
         for (size_t k = 0; k < 4; ++k) {
           if (k != 1) {
             auto v = read_elt(buf, F);
@@ -240,7 +252,7 @@ struct ZkProof {
           }
         }
       }
-      for (size_t wi = 0; wi < c.l[i].logw; ++wi) {
+      for (size_t wi = 0; wi < circ.l[i].logw; ++wi) {
         for (size_t k = 0; k < 3; ++k) {
           // Optimization: the p(1) value was not sent.
           if (k != 1) {
@@ -270,14 +282,15 @@ struct ZkProof {
     return true;
   }
 
-  bool read_com(LigeroCommitment<Field> &com0, ReadBuffer &buf,
-                const Field &F) {
+  static bool read_com(LigeroCommitment<Field> &com0, ReadBuffer &buf,
+                       const Field &F) {
     if (!buf.have(Digest::kLength)) return false;
     read_digest(buf, com0.root);
     return true;
   }
 
-  bool read_com_proof(LigeroProof<Field> &pr, ReadBuffer &buf, const Field &F) {
+  static bool read_com_proof(LigeroProof<Field> &pr, ReadBuffer &buf,
+                             const Field &F) {
     if (!buf.have(pr.block * Field::kBytes)) return false;
     for (size_t i = 0; i < pr.block; ++i) {
       auto v = read_elt(buf, F);
@@ -381,23 +394,26 @@ struct ZkProof {
     return true;
   }
 
-  std::optional<Elt> read_elt(ReadBuffer &buf, const Field &F) const {
+  static std::optional<Elt> read_elt(ReadBuffer &buf, const Field &F) {
     return F.of_bytes_field(buf.next(Field::kBytes));
   }
 
-  std::optional<Elt> read_subfield_elt(ReadBuffer &buf, const Field &F) const {
+  static std::optional<Elt> read_subfield_elt(ReadBuffer &buf,
+                                              const Field &F) {
     return F.of_bytes_subfield(buf.next(Field::kSubFieldBytes));
   }
 
-  void read_digest(ReadBuffer &buf, Digest &x) const {
+  static void read_digest(ReadBuffer &buf, Digest &x) {
     buf.next(Digest::kLength, x.data);
   }
 
-  void read_nonce(ReadBuffer &buf, MerkleNonce &x) const {
+  static void read_nonce(ReadBuffer &buf, MerkleNonce &x) {
     buf.next(MerkleNonce::kLength, x.bytes);
   }
 
-  size_t read_size(ReadBuffer &buf) { return u32_of_le(buf.next(4)); }
+  static size_t read_size(ReadBuffer &buf) {
+    return u32_of_le(buf.next(4));
+  }
 };
 
 }  // namespace proofs

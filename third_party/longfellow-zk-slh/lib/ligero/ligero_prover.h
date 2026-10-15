@@ -85,27 +85,52 @@ class LigeroProver {
     for (size_t i = 0; i < subfield_boundary; ++i) {
       check(F.in_subfield(W[i]), "element not in subfield");
     }
+    // The rows hashed by subfield bytes must lie in the subfield.
+    check(p_.nsub * p_.w <= subfield_boundary,
+          "subfield rows above the subfield boundary");
 
     layout(W, subfield_boundary, lqc, interpolator, rng, F);
 
     // Merkle commitment. Leaf j hashes the nonce and column j of the
-    // extension (rows in order); one hash per column, fed row by row.
+    // extension (rows in order, as LigeroCommon::column_hash); one hash per
+    // column, fed row by row. The subfield bytes of up to kStage subfield
+    // rows are staged per column and hashed in one update.
     const size_t ncol = p_.block_enc - p_.dblock;
     const std::vector<MerkleNonce> &nonce = mc_.draw_nonces(rng);
     std::vector<Hash> column(ncol);
     for (size_t j = 0; j < ncol; ++j) {
       column[j].Update(nonce[j].bytes, MerkleNonce::kLength);
     }
+    constexpr size_t kSub = Field::kSubFieldBytes;
+    constexpr size_t kStage = (256 + kSub - 1) / kSub;
+    std::vector<uint8_t> stage(p_.nsub == 0 ? 0 : ncol * kStage * kSub);
+    size_t staged = 0;
+    auto flush = [&]() {
+      for (size_t j = 0; j < ncol && staged > 0; ++j) {
+        column[j].Update(&stage[j * kStage * kSub], staged * kSub);
+      }
+      staged = 0;
+    };
     const auto interp = interpolator.make(p_.block, p_.block_enc);
     std::vector<Elt> buf(p_.block_enc);
     for (size_t i = 0; i < p_.nrow; ++i) {
       const Elt *row = row_at(i, &buf[0], *interp);
+      if (p_.subfield_row(i)) {
+        for (size_t j = 0; j < ncol; ++j) {
+          F.to_bytes_subfield(&stage[(j * kStage + staged) * kSub],
+                              row[p_.dblock + j]);
+        }
+        if (++staged == kStage) flush();
+        continue;
+      }
+      flush();
       for (size_t j = 0; j < ncol; ++j) {
         uint8_t bytes[Field::kBytes];
         F.to_bytes_field(bytes, row[p_.dblock + j]);
         column[j].Update(bytes, sizeof(bytes));
       }
     }
+    flush();
     std::vector<Digest> leaves(ncol);
     for (size_t j = 0; j < ncol; ++j) column[j].DigestData(leaves[j].data);
     commitment.root = mc_.commit_leaves(leaves);
@@ -123,7 +148,22 @@ class LigeroProver {
              const LigeroHash &hash_of_llterm,
              const LigeroQuadraticConstraint lqc[/*nq*/],
              const InterpolatorFactory &interpolator, const Field &F,
-             const LigeroProductRow<Field> *row = nullptr) {
+             const LigeroProductRow<Field> *row = nullptr, size_t nrowp = 1) {
+    const LigeroTermSpan<Field> span{llterm, nllterm, 0};
+    prove(proof, ts, nl, &span, 1, LigeroUnitSpan<Field>{}, hash_of_llterm,
+          lqc, interpolator, F, row, nrowp);
+  }
+
+  // Not upstream: the linear terms as SPANS (several lists, each with a row
+  // offset) and UNITS (terms with coefficient +-1), and the linear-test
+  // vector one row at a time (LigeroRows).
+  void prove(LigeroProof<Field> &proof, Transcript &ts, size_t nl,
+             const LigeroTermSpan<Field> spans[], size_t nspans,
+             const LigeroUnitSpan<Field> &units,
+             const LigeroHash &hash_of_llterm,
+             const LigeroQuadraticConstraint lqc[/*nq*/],
+             const InterpolatorFactory &interpolator, const Field &F,
+             const LigeroProductRow<Field> *row, size_t nrowp) {
     {
       // P -> V
       // theorem statement
@@ -141,17 +181,14 @@ class LigeroProver {
     {
       std::vector<Elt> alphal(nl);
       std::vector<std::array<Elt, 3>> alphaq(p_.nq);
-      std::vector<Elt> A(p_.nwqrow * p_.w);
 
       // V -> P
       LigeroTranscript<Field>::gen_alphal(nl, &alphal[0], ts, F);
       LigeroTranscript<Field>::gen_alphaq(&alphaq[0], p_, ts, F);
 
-      LigeroCommon<Field>::inner_product_vector(&A[0], p_, nl, nllterm, llterm,
-                                                &alphal[0], lqc, &alphaq[0], F,
-                                                row);
-
-      dot_proof(&proof.y_dot[0], &A[0], interpolator, F);
+      const LigeroRows<Field> rows(p_, nl, spans, nspans, units, &alphal[0],
+                                   lqc, &alphaq[0], F, row, nrowp);
+      dot_proof(&proof.y_dot[0], rows, interpolator, F);
     }
 
     {
@@ -388,7 +425,7 @@ class LigeroProver {
     }
   }
 
-  void dot_proof(Elt y[/*dblock*/], const Elt A[/*nwqrow, w*/],
+  void dot_proof(Elt y[/*dblock*/], const LigeroRows<Field> &rows,
                  const InterpolatorFactory &interpolator, const Field &F) {
     const auto interpA = interpolator.make(p_.block, p_.dblock);
 
@@ -398,7 +435,7 @@ class LigeroProver {
     std::vector<Elt> Aext(p_.dblock);
     std::vector<Elt> buf(p_.dblock);
     for (size_t i = 0; i < p_.nwqrow; ++i) {
-      LigeroCommon<Field>::layout_Aext(&Aext[0], p_, i, &A[0], F);
+      LigeroCommon<Field>::layout_row(&Aext[0], p_, i, rows, F);
       interpA->interpolate(&Aext[0]);
 
       // Accumulate y += A \otimes W, with the witness row encoded to DBLOCK.

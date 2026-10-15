@@ -18,6 +18,9 @@
 // R is the result of F or H; a WOTS+ chain step with J < DIGIT passes its
 // input through, so that a chain of 15 copies computes chain(sig, DIGIT,
 // 15 - DIGIT). The ACC chain computes the WOTS+ checksum.
+//
+// OneBlockStepCircuit is the same step for a one-block copy (Layout1), with
+// fewer private inputs: no capacity and no output state.
 
 #ifndef PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_SLH_DSA_SLH_DSA_CIRCUIT_H_
 #define PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_SLH_DSA_SLH_DSA_CIRCUIT_H_
@@ -136,6 +139,120 @@ class StepCircuit {
     const vacc sum = lc_.vadd(w.acc_in, step);
     for (size_t b = 0; b < kAccBits; ++b) {
       lc_.assert0(lc_.land(is_acc, lc_.lxor(w.acc_out[b], sum[b])));
+    }
+  }
+
+ private:
+  const LogicCircuit& lc_;
+};
+
+// The step circuit of a one-block copy (Layout1; not upstream): the same
+// relation as StepCircuit with CONT = 0 and MASK = 0 past the first W
+// bytes. The state starts at zero, Keccak-f is computed without a witness,
+// and R is checked against the computed output.
+template <class LogicCircuit, size_t kN>
+class OneBlockStepCircuit {
+  using BitW = typename LogicCircuit::BitW;
+  using v8 = typename LogicCircuit::v8;
+  using v64 = typename LogicCircuit::v64;
+  using v4 = typename LogicCircuit::template bitvec<4>;
+  using vacc = typename LogicCircuit::template bitvec<kAccBits>;
+  using L = Layout1<kN>;
+
+ public:
+  explicit OneBlockStepCircuit(const LogicCircuit& lc) : lc_(lc) {}
+
+  // Public inputs, after the constant one (input 0).
+  struct Public {
+    std::array<v8, kRate> pub;
+    std::array<v8, L::W> mask;
+    BitW swap_en, is_wots;
+    v4 j;
+    BitW is_acc;
+
+    void input(const LogicCircuit& lc) {
+      for (auto& x : pub) x = lc.template vinput<8>();
+      for (auto& x : mask) x = lc.template vinput<8>();
+      swap_en = lc.input();
+      is_wots = lc.input();
+      j = lc.template vinput<4>();
+      is_acc = lc.input();
+    }
+  };
+
+  // Private inputs, in the order of Layout1.
+  struct Private {
+    std::array<v8, L::W> block;
+    BitW swap;
+    v4 digit;
+    vacc acc_in, acc_out;
+    std::array<v8, kN> r;
+
+    void input(const LogicCircuit& lc) {
+      for (auto& x : block) x = lc.template vinput<8>();
+      swap = lc.input();
+      digit = lc.template vinput<4>();
+      acc_in = lc.template vinput<kAccBits>();
+      acc_out = lc.template vinput<kAccBits>();
+      for (auto& x : r) x = lc.template vinput<8>();
+    }
+  };
+
+  void assert_step(const Public& u, const Private& w) const {
+    const auto& pub = u.pub;
+    const auto& mask = u.mask;
+    const auto& block = w.block;
+    const auto& digit = w.digit;
+    const auto& r = w.r;
+
+    // Absorb into the zero state.
+    const BitW sw = lc_.land(u.swap_en, w.swap);
+    v64 A[5][5];
+    for (size_t x = 0; x < 5; ++x) {
+      for (size_t y = 0; y < 5; ++y) A[x][y] = lc_.template vbit<64>(0);
+    }
+    // Byte I of the input: PUB past the first W bytes (MASK = 0 there).
+    auto input = [&](size_t i) {
+      if (i >= L::W) return v8(pub[i]);
+      v8 data(block[i]);
+      if (i >= L::window) {
+        const size_t other = i < L::window + kN ? i + kN : i - kN;
+        for (size_t b = 0; b < 8; ++b) {
+          data[b] = lc_.mux(sw, block[other][b], block[i][b]);
+        }
+      }
+      return lc_.vxor(pub[i], lc_.vand(mask[i], data));
+    };
+    for (size_t i = 0; i < kRate; ++i) {
+      const v8 in = input(i);
+      const size_t lane = i / 8;
+      for (size_t b = 0; b < 8; ++b) {
+        auto& bit = A[lane % 5][lane / 5][8 * (i % 8) + b];
+        bit = lc_.lxor(bit, in[b]);
+      }
+    }
+
+    Sha3Circuit<LogicCircuit> sha3(lc_);
+    sha3.keccak_f_1600(A);
+
+    // Result.
+    const BitW active = lc_.lor(lc_.lnot(u.is_wots), lc_.vleq(digit, u.j));
+    for (size_t i = 0; i < kN; ++i) {
+      const size_t lane = i / 8;
+      for (size_t b = 0; b < 8; ++b) {
+        const BitW out = A[lane % 5][lane / 5][8 * (i % 8) + b];
+        lc_.assert_eq(r[i][b], lc_.mux(active, out, block[L::window + i][b]));
+      }
+    }
+
+    // Checksum accumulator: 15 - DIGIT is the complement of DIGIT.
+    vacc step;
+    for (size_t b = 0; b < kAccBits; ++b) {
+      step[b] = b < 4 ? lc_.lnot(digit[b]) : lc_.bit(0);
+    }
+    const vacc sum = lc_.vadd(w.acc_in, step);
+    for (size_t b = 0; b < kAccBits; ++b) {
+      lc_.assert0(lc_.land(u.is_acc, lc_.lxor(w.acc_out[b], sum[b])));
     }
   }
 

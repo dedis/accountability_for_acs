@@ -154,15 +154,13 @@ class ZkProver : public ProverLayers<Field> {
     std::vector<LigeroLinearConstraint<Field>> a;
     std::vector<Elt> b;
     LigeroProductRow<Field> row;
-    a.reserve(ZkCommon<Field>::num_terms(c_) +
-              (extra != nullptr ? extra->a.size() : 0));
+    a.reserve(ZkCommon<Field>::num_terms(c_));
     b.reserve(c_.nl + 1);
     size_t ci = ZkCommon<Field>::verifier_constraints(
         c_, W, zkp.proof, &aux, a, b, row, tsp, n_witness_, f_);
+    LigeroUnitSpan<Field> units;
     if (extra != nullptr) {
-      for (const auto& e : extra->a) {
-        a.push_back(LigeroLinearConstraint<Field>{ci + e.c, e.w, e.k});
-      }
+      units = {extra->a.data(), extra->a.size(), ci, nullptr};
       ci += extra->b.size();
     }
     log(INFO, "ZK constraints done");
@@ -177,8 +175,9 @@ class ZkProver : public ProverLayers<Field> {
     const LigeroHash hash_of_A =
         extra != nullptr ? ZkCommon<Field>::extra_hash(*extra, f_)
                          : LigeroHash{0xde, 0xad, 0xbe, 0xef};
-    lp->prove(zkp.com_proof, tsp, ci, a.size(), &a[0], hash_of_A, &lqc_[0],
-              rsf_, f_, &row);
+    const LigeroTermSpan<Field> span{a.data(), a.size(), 0};
+    lp->prove(zkp.com_proof, tsp, ci, &span, 1, units, hash_of_A, &lqc_[0],
+              rsf_, f_, &row, 1);
 
     log(INFO, "Prover Done: flag");
     return true;

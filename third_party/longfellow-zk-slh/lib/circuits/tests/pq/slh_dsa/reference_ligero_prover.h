@@ -73,7 +73,7 @@ class ReferenceLigeroProver {
 
     // Merkle commitment
     auto updhash = [&](size_t j, Hash &sha) {
-      LigeroCommon<Field>::column_hash(p_.nrow, &tableau_at(0, j + p_.dblock),
+      LigeroCommon<Field>::column_hash(p_, &tableau_at(0, j + p_.dblock),
                                        p_.block_enc, sha, F);
     };
     commitment.root = mc_.commit(updhash, rng);

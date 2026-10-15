@@ -145,6 +145,22 @@ struct LigeroParam {
   size_t iw;     // first witness row
   size_t iq;     // first quadratic row
 
+  // Not upstream: the witness rows [iw, iw + nsub) are hashed into the
+  // Merkle leaves by their subfield bytes (Field::kSubFieldBytes), and the
+  // verifier rejects an opened element of these rows outside the subfield,
+  // so the leaf bytes still determine the column. Zero keeps the upstream
+  // leaves.
+  size_t nsub = 0;
+
+  // Hashes by subfield bytes the witness rows whose input lies in the
+  // subfield: the rows of witnesses below SUBFIELD_BOUNDARY, whose random
+  // elements LigeroProver::commit draws in the subfield. Their encoding
+  // stays in the subfield, which holds the evaluation points.
+  void hash_subfield_rows(size_t subfield_boundary) {
+    nsub = std::min(nwrow, subfield_boundary / w);
+  }
+  bool subfield_row(size_t i) const { return i >= iw && i < iw + nsub; }
+
   // Deprecated version of the constructor attempts to optimize the block_enc
   // parameter. This optimization can now be performed offline and stored as
   // a parameter in ZkSpecStruct.
@@ -375,7 +391,8 @@ struct LigeroLinearConstraint {
 // A linear-constraint row whose coefficients are a product (not upstream):
 // the coefficient of witness FIRST + i * V.size() + j in row C is
 // U[i] * V[j]. It replaces U.size() * V.size() LigeroLinearConstraint terms
-// with U.size() + V.size() elements.
+// with U.size() + V.size() elements. The provers and verifiers take an
+// array of NROWP such rows (one per circuit of a multi-circuit proof).
 template <class Field>
 struct LigeroProductRow {
   using Elt = typename Field::Elt;
@@ -404,7 +421,7 @@ class LigeroCommon {
       size_t nllterm, const LigeroLinearConstraint<Field> llterm[/*nllterm*/],
       const Elt alphal[/*nl*/], const LigeroQuadraticConstraint lqc[/*nq*/],
       const std::array<Elt, 3> alphaq[/*nq*/], const Field &F,
-      const LigeroProductRow<Field> *row = nullptr) {
+      const LigeroProductRow<Field> *row = nullptr, size_t nrowp = 1) {
     // clear A and overwrite it later.
     Blas<Field>::clear(p.nwqrow * p.w, A, 1, F);
 
@@ -416,15 +433,16 @@ class LigeroCommon {
       F.add(A[term.w], F.mulf(term.k, alphal[term.c]));
     }
 
-    // the product row, if any (not upstream)
-    if (row != nullptr) {
-      const size_t nu = row->u.size(), nv = row->v.size();
-      proofs::check(row->c < nl, "row->c < nl");
-      proofs::check(row->first + nu * nv <= p.nw, "product row in range");
+    // the product rows, if any (not upstream)
+    for (size_t k = 0; row != nullptr && k < nrowp; ++k) {
+      const LigeroProductRow<Field> &pr = row[k];
+      const size_t nu = pr.u.size(), nv = pr.v.size();
+      proofs::check(pr.c < nl, "row->c < nl");
+      proofs::check(pr.first + nu * nv <= p.nw, "product row in range");
       for (size_t i = 0; i < nu; ++i) {
-        const Elt s = F.mulf(row->u[i], alphal[row->c]);
-        Elt *a = &A[row->first + i * nv];
-        for (size_t j = 0; j < nv; ++j) F.add(a[j], F.mulf(s, row->v[j]));
+        const Elt s = F.mulf(pr.u[i], alphal[pr.c]);
+        Elt *a = &A[pr.first + i * nv];
+        for (size_t j = 0; j < nv; ++j) F.add(a[j], F.mulf(s, pr.v[j]));
       }
     }
 
@@ -450,6 +468,15 @@ class LigeroCommon {
     }
   }
 
+  // Row I of the vector of inner_product_vector() into AEXT[R, R + W), with
+  // AEXT[0, R) cleared, as layout_Aext() lays it out (not upstream).
+  template <class Rows>
+  static void layout_row(Elt Aext[/*>=block*/], const LigeroParam<Field> &p,
+                         size_t i, const Rows &rows, const Field &F) {
+    Blas<Field>::clear(p.r, &Aext[0], 1, F);
+    rows.row(i, &Aext[p.r]);
+  }
+
   // layout a witness block where the "witness" is public, and
   // thus the randomess is zero.
   static void layout_Aext(Elt Aext[/*>=block*/], const LigeroParam<Field> &p,
@@ -459,13 +486,24 @@ class LigeroCommon {
     Blas<Field>::copy(p.w, &Aext[p.r], 1, &A[i * p.w], 1);
   }
 
-  static void column_hash(size_t n, const Elt x[/*n:incx*/], size_t incx,
+  // Hashes the column X (row I at X[I * INCX]) into SHA, a subfield row
+  // (LigeroParam::nsub) by its subfield bytes, which it must have, the
+  // other rows by their field bytes, in one update.
+  static void column_hash(const LigeroParam<Field> &p, const Elt x[], size_t incx,
                           Hash &sha, const Field &F) {
-    for (size_t i = 0; i < n; ++i) {
-      uint8_t buf[Field::kBytes];
-      F.to_bytes_field(buf, x[i * incx]);
-      sha.Update(buf, sizeof(buf));
+    std::vector<uint8_t> buf(p.nsub * Field::kSubFieldBytes +
+                             (p.nrow - p.nsub) * Field::kBytes);
+    uint8_t *b = buf.data();
+    for (size_t i = 0; i < p.nrow; ++i) {
+      if (p.subfield_row(i)) {
+        F.to_bytes_subfield(b, x[i * incx]);
+        b += Field::kSubFieldBytes;
+      } else {
+        F.to_bytes_field(b, x[i * incx]);
+        b += Field::kBytes;
+      }
     }
+    sha.Update(buf.data(), buf.size());
   }
 };
 
@@ -475,6 +513,182 @@ class LigeroCommon {
 struct LigeroHash {
   static constexpr size_t kLength = kHashDigestSize;
   uint8_t bytes[kLength];
+};
+
+// Linear-constraint terms whose rows start at ROW_OFFSET (not upstream): a
+// statement can pass its terms without copying them into one list.
+template <class Field>
+struct LigeroTermSpan {
+  const LigeroLinearConstraint<Field> *a;
+  size_t n;
+  size_t row_offset;
+};
+
+// A linear-constraint term with coefficient +1 (NEG false) or -1, in 12
+// bytes (not upstream): the links of a statement.
+struct LigeroUnitTerm {
+  uint32_t c, w;
+  bool neg;
+};
+
+// Unit terms whose rows start at ROW_OFFSET, with the right-hand sides B of
+// their rows (B[i] for row ROW_OFFSET + i; the verifier needs them).
+template <class Field>
+struct LigeroUnitSpan {
+  const LigeroUnitTerm *a = nullptr;
+  size_t n = 0;
+  size_t row_offset = 0;
+  const typename Field::Elt *b = nullptr;
+};
+
+// The vector of LigeroCommon::inner_product_vector(), one row of W elements
+// at a time, never stored in full (not upstream). The terms are bucketed by
+// row (a counting sort: 4 bytes per term); the product rows and the
+// quadratic routing are applied per row. Every element is the same sum as
+// in inner_product_vector() (field addition is exact), so the proofs are
+// the same.
+template <class Field>
+class LigeroRows {
+  using Elt = typename Field::Elt;
+  using Llc = LigeroLinearConstraint<Field>;
+
+ public:
+  LigeroRows(const LigeroParam<Field> &p, size_t nl,
+             const LigeroTermSpan<Field> spans[], size_t nspans,
+             const LigeroUnitSpan<Field> &units, const Elt alphal[/*nl*/],
+             const LigeroQuadraticConstraint lqc[/*nq*/],
+             const std::array<Elt, 3> alphaq[/*nq*/], const Field &F,
+             const LigeroProductRow<Field> *prow, size_t nprow)
+      : p_(p),
+        spans_(spans, spans + nspans),
+        units_(units),
+        alphal_(alphal),
+        prow_(prow),
+        nprow_(prow == nullptr ? 0 : nprow),
+        f_(F),
+        start_(p.nwqrow + 1, 0) {
+    // Term ids: the terms of the spans in order, then the unit terms.
+    for (const auto &sp : spans_) {
+      first_.push_back(nllc_);
+      nllc_ += sp.n;
+    }
+    proofs::check(nllc_ + units.n < (size_t(1) << 32), "too many terms");
+    for (const auto &sp : spans_) {
+      for (size_t t = 0; t < sp.n; ++t) {
+        const Llc &term = sp.a[t];
+        proofs::check(term.w < p.nw, "term.w < p.nw");
+        proofs::check(term.c + sp.row_offset < nl, "term.c < nl");
+        ++start_[term.w / p.w + 1];
+      }
+    }
+    for (size_t t = 0; t < units.n; ++t) {
+      const LigeroUnitTerm &term = units.a[t];
+      proofs::check(term.w < p.nw, "term.w < p.nw");
+      proofs::check(term.c + units.row_offset < nl, "term.c < nl");
+      ++start_[term.w / p.w + 1];
+    }
+    for (size_t i = 0; i < p.nwqrow; ++i) start_[i + 1] += start_[i];
+    order_.resize(nllc_ + units.n);
+    std::vector<size_t> next(start_.begin(), start_.end() - 1);
+    for (size_t k = 0; k < spans_.size(); ++k) {
+      for (size_t t = 0; t < spans_[k].n; ++t) {
+        order_[next[spans_[k].a[t].w / p.w]++] =
+            static_cast<uint32_t>(first_[k] + t);
+      }
+    }
+    for (size_t t = 0; t < units.n; ++t) {
+      order_[next[units.a[t].w / p.w]++] = static_cast<uint32_t>(nllc_ + t);
+    }
+    for (size_t k = 0; k < nprow_; ++k) {
+      proofs::check(prow_[k].c < nl, "row->c < nl");
+      proofs::check(
+          prow_[k].first + prow_[k].u.size() * prow_[k].v.size() <= p.nw,
+          "product row in range");
+    }
+    // The quadratic routing, by index into the vector.
+    const size_t ax = p.nwrow * p.w, ay = ax + p.nqtriples * p.w,
+                 az = ay + p.nqtriples * p.w;
+    for (size_t iw = 0; iw < p.nq; ++iw) {
+      const auto &l = lqc[iw];
+      quad_.push_back({ax + iw, alphaq[iw][0], false});
+      quad_.push_back({l.x, alphaq[iw][0], true});
+      quad_.push_back({ay + iw, alphaq[iw][1], false});
+      quad_.push_back({l.y, alphaq[iw][1], true});
+      quad_.push_back({az + iw, alphaq[iw][2], false});
+      quad_.push_back({l.z, alphaq[iw][2], true});
+    }
+    std::stable_sort(quad_.begin(), quad_.end(),
+                     [](const Quad &a, const Quad &b) { return a.i < b.i; });
+  }
+
+  // Row I (elements I * W .. (I + 1) * W) into OUT[0, W).
+  void row(size_t i, Elt out[/*w*/]) const {
+    const size_t w = p_.w, lo = i * w, hi = lo + w;
+    Blas<Field>::clear(w, out, 1, f_);
+    for (size_t k = 0; k < nprow_; ++k) {
+      const LigeroProductRow<Field> &pr = prow_[k];
+      const size_t nv = pr.v.size();
+      const size_t end = pr.first + pr.u.size() * nv;
+      if (end <= lo || pr.first >= hi) continue;
+      size_t j = std::max(lo, pr.first) - pr.first;
+      const size_t jend = std::min(hi, end) - pr.first;
+      while (j < jend) {
+        const size_t ui = j / nv;
+        const Elt s = f_.mulf(pr.u[ui], alphal_[pr.c]);
+        const size_t stop = std::min(jend, (ui + 1) * nv);
+        for (; j < stop; ++j) {
+          f_.add(out[pr.first + j - lo], f_.mulf(s, pr.v[j % nv]));
+        }
+      }
+    }
+    for (size_t t = start_[i]; t < start_[i + 1]; ++t) {
+      const size_t id = order_[t];
+      if (id >= nllc_) {
+        const LigeroUnitTerm &term = units_.a[id - nllc_];
+        const Elt &a = alphal_[term.c + units_.row_offset];
+        if (term.neg) {
+          f_.sub(out[term.w - lo], a);
+        } else {
+          f_.add(out[term.w - lo], a);
+        }
+        continue;
+      }
+      size_t k = spans_.size() - 1;
+      while (first_[k] > id) --k;
+      const Llc &term = spans_[k].a[id - first_[k]];
+      f_.add(out[term.w - lo],
+             f_.mulf(term.k, alphal_[term.c + spans_[k].row_offset]));
+    }
+    auto q = std::lower_bound(
+        quad_.begin(), quad_.end(), lo,
+        [](const Quad &a, size_t x) { return a.i < x; });
+    for (; q != quad_.end() && q->i < hi; ++q) {
+      if (q->sub) {
+        f_.sub(out[q->i - lo], q->v);
+      } else {
+        f_.add(out[q->i - lo], q->v);
+      }
+    }
+  }
+
+ private:
+  struct Quad {
+    size_t i;
+    Elt v;
+    bool sub;
+  };
+  const LigeroParam<Field> &p_;
+  std::vector<LigeroTermSpan<Field>> spans_;
+  const LigeroUnitSpan<Field> units_;
+  std::vector<size_t> first_;
+  size_t nllc_ = 0;
+  const Elt *alphal_;
+  const LigeroProductRow<Field> *prow_;
+  size_t nprow_;
+  const Field &f_;
+  std::vector<size_t> start_;
+  std::vector<uint32_t> order_;
+  std::vector<Quad> quad_;
 };
 
 }  // namespace proofs
