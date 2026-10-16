@@ -1,0 +1,39 @@
+{
+  "meta": {
+    "type": "longfellow",
+    "variant": "pq_prove_verify_no_cft_ml_dsa87",
+    "N": 10,
+    "credentialMode": "init_once_per_show_refresh",
+    "timestampIso": "2026-10-15T23:22:28.988Z"
+  },
+  "results": {
+    "successfulIters": 10
+  },
+  "avgMs": {
+    "proverTotal": 11679.2139803,
+    "verify": 2417.6422011000004
+  },
+  "statsMs": {
+    "proverTotal": {
+      "minMs": 11597.092047,
+      "maxMs": 11753.230005,
+      "avgMs": 11679.2139803,
+      "medianMs": 11701.296609,
+      "p95Ms": 11727.362672
+    },
+    "verify": {
+      "minMs": 2377.375292,
+      "maxMs": 2503.970668,
+      "avgMs": 2417.6422011000004,
+      "medianMs": 2386.582439,
+      "p95Ms": 2498.333668
+    },
+    "fullCycle": {
+      "minMs": 13985.143257,
+      "maxMs": 14251.563673,
+      "avgMs": 14096.856181399999,
+      "medianMs": 14088.197277,
+      "p95Ms": 14223.80809
+    }
+  }
+}

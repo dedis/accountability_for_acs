@@ -1,0 +1,39 @@
+{
+  "meta": {
+    "type": "longfellow",
+    "variant": "pq_prove_verify_slh_dsa_shake_192s",
+    "N": 10,
+    "credentialMode": "init_once_per_show_refresh",
+    "timestampIso": "2026-10-15T22:29:43.775Z"
+  },
+  "results": {
+    "successfulIters": 10
+  },
+  "avgMs": {
+    "proverTotal": 12280.4683307,
+    "verify": 2973.8369055999997
+  },
+  "statsMs": {
+    "proverTotal": {
+      "minMs": 12162.369422,
+      "maxMs": 12491.279964,
+      "avgMs": 12280.4683307,
+      "medianMs": 12256.838651499998,
+      "p95Ms": 12383.260423
+    },
+    "verify": {
+      "minMs": 2865.91121,
+      "maxMs": 3210.949501,
+      "avgMs": 2973.8369055999997,
+      "medianMs": 2896.6172925,
+      "p95Ms": 3169.967418
+    },
+    "fullCycle": {
+      "minMs": 15032.478965,
+      "maxMs": 15661.247382,
+      "avgMs": 15254.305236299999,
+      "medianMs": 15169.121716,
+      "p95Ms": 15530.405423
+    }
+  }
+}

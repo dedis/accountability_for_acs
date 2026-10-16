@@ -1,0 +1,24 @@
+{
+  "host": {
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M5 Pro",
+    "logicalCpus": 18
+  },
+  "docker": {
+    "cpus": 12,
+    "memBytes": 33600389120
+  },
+  "gitCommit": "fdea511",
+  "started": "2026-10-15T23:15:02+00:00",
+  "finished": "2026-10-15T23:22:29+00:00",
+  "limits": {
+    "cpus": "8",
+    "cpusFull": "12",
+    "memory": "16g"
+  },
+  "build": "pq (ml-dsa, level 5)",
+  "succeeded": {
+    "standard/local-8cpu-pq-ml-dsa-5:pq_prove_verify": true,
+    "standard/local-8cpu-pq-ml-dsa-5:pq_prove_verify_no_cft": true
+  }
+}
