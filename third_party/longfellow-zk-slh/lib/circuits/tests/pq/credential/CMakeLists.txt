@@ -24,10 +24,14 @@ proofs_add_test(checkpoint_test)
 target_link_libraries(checkpoint_test ml_dsa sha3)
 target_compile_definitions(checkpoint_test PRIVATE PROOFS_SHAKE256)
 
+proofs_add_test(circuit_cache_test)
+target_link_libraries(circuit_cache_test ml_dsa sha3)
+target_compile_definitions(circuit_cache_test PRIVATE PROOFS_SHAKE256)
+
 # Warnings are errors. -Wunused-parameter is off: upstream headers
 # (algebra, gf2k, logic, sumcheck, ligero) have unused parameters.
-foreach(PROG zk_multi_test sponge_test checkpoint_test pq_credential_test
-             pq_credential_5_test)
+foreach(PROG zk_multi_test sponge_test checkpoint_test circuit_cache_test
+             pq_credential_test pq_credential_5_test)
   target_compile_options(${PROG} PRIVATE -Wall -Wextra -Werror
                                          -Wno-unused-parameter)
 endforeach()

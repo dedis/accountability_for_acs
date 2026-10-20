@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -24,6 +25,7 @@
 #include "circuits/compiler/compiler.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#include "circuits/tests/pq/circuit_cache.h"
 #include "circuits/tests/pq/slh_dsa/slh_dsa.h"
 #include "circuits/tests/pq/slh_dsa/slh_dsa_circuit.h"
 #include "algebra/reed_solomon_componentwise.h"
@@ -121,7 +123,7 @@ class SlhDsaZk {
         msg_len_(msg_len),
         plan_(pk_, ctx_, std::vector<uint8_t>(msg_len_, 0),
               std::vector<uint8_t>(P::sig_bytes, 0)),
-        circuit_(make_circuit(plan_.copies.size())),
+        circuit_(stored_circuit(plan_.copies.size(), /*one=*/false)),
         rs_(f_) {
     check(circuit_->npub_in == L::npub, "public input layout");
     check(circuit_->ninputs == L::npub + L::npriv, "private input layout");
@@ -267,6 +269,20 @@ class SlhDsaZk {
     set_bits(w, i, c, cp.acc_out, kAccBits, f);
     for (size_t k = 0; k < P::n; ++k) set_bits(w, i, c, cp.r[k], 8, f);
     check(i == L1::npub + L1::npriv, "private input count");
+  }
+
+  // make_circuit() or, with ONE, make_circuit1(), stored once with
+  // PQ_CIRCUIT_CACHE (circuits/tests/pq/circuit_cache.h; not upstream).
+  static std::unique_ptr<Circuit<Field>> stored_circuit(size_t nc, bool one) {
+    const Field f;
+    const std::string key =
+        std::string(one ? "slh_step1" : "slh_step") + "_n" +
+        std::to_string(P::n) + "_h" + std::to_string(P::h) + "_d" +
+        std::to_string(P::d) + "_a" + std::to_string(P::a) + "_k" +
+        std::to_string(P::k) + "_nc" + std::to_string(nc);
+    return cached_circuit(f, key, [nc, one] {
+      return one ? make_circuit1(nc) : make_circuit(nc);
+    });
   }
 
   // make_circuit() for NC one-block copies (not upstream).

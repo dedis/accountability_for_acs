@@ -35,6 +35,9 @@ enum FieldID {
   GOLDI_ID = 8,
   FP64_2_ID = 9,
   SECP_ID = 10,
+  FP24_12_ID = 11,    // Fp24Ext<12> (not upstream)
+  GF2_128_2_ID = 12,  // GF2_128Ext<2> (not upstream)
+  GF2_128_3_ID = 13,  // GF2_128Ext<3> (not upstream)
 };
 
 struct CircuitIO {

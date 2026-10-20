@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -42,6 +43,7 @@
 #include "circuits/compiler/compiler.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#include "circuits/tests/pq/circuit_cache.h"
 #include "circuits/tests/pq/credential/age.h"
 #include "circuits/tests/pq/credential/credential.h"
 #include "circuits/tests/pq/credential/lwe.h"
@@ -650,17 +652,26 @@ class MlDsaCredential {
     return w;
   }
 
+  // The circuit NAME of BODY for NC copies, stored once with
+  // PQ_CIRCUIT_CACHE (circuit_cache.h).
   template <class Body>
-  std::unique_ptr<Circuit<Field>> compile(size_t nc, const Body& body) const {
-    QuadCircuit<Field> Q(f_);
-    const CompilerBackend<Field> cbk(&Q);
-    const LC lc(&cbk, f_);
-    body(lc, Q);
-    return Q.mkcircuit(nc);
+  std::unique_ptr<Circuit<Field>> compile(const std::string& name, size_t nc,
+                                          const Body& body) const {
+    return cached_circuit(
+        f_,
+        "mldsa_cred_k" + std::to_string(Params::K) + "_" + name + "_nc" +
+            std::to_string(nc),
+        [&] {
+          QuadCircuit<Field> Q(f_);
+          const CompilerBackend<Field> cbk(&Q);
+          const LC lc(&cbk, f_);
+          body(lc, Q);
+          return Q.mkcircuit(nc);
+        });
   }
 
   std::unique_ptr<Circuit<Field>> make_sponge(size_t nc) const {
-    return compile(nc, [](const LC& lc, QuadCircuit<Field>& Q) {
+    return compile("sponge", nc, [](const LC& lc, QuadCircuit<Field>& Q) {
       typename SpongeStep<LC>::Public u;
       typename SpongeStep<LC>::Private w;
       Sponge<Field>::inputs(lc, Q, u, w);
@@ -670,7 +681,7 @@ class MlDsaCredential {
   }
 
   std::unique_ptr<Circuit<Field>> make_verify() const {
-    return compile(2, [](const LC& lc, QuadCircuit<Field>& Q) {
+    return compile("verify", 2, [](const LC& lc, QuadCircuit<Field>& Q) {
       Q.private_input();
       auto p = std::make_unique<typename KV::Private>();
       p->input(lc);
@@ -680,7 +691,7 @@ class MlDsaCredential {
   }
 
   std::unique_ptr<Circuit<Field>> make_rej() const {
-    return compile(kPolys, [](const LC& lc, QuadCircuit<Field>& Q) {
+    return compile("rej", kPolys, [](const LC& lc, QuadCircuit<Field>& Q) {
       Q.private_input();
       auto w = std::make_unique<typename Rej::Private>();
       w->input(lc);
@@ -690,7 +701,7 @@ class MlDsaCredential {
   }
 
   std::unique_ptr<Circuit<Field>> make_age() const {
-    return compile(1, [](const LC& lc, QuadCircuit<Field>& Q) {
+    return compile("age", 1, [](const LC& lc, QuadCircuit<Field>& Q) {
       typename AgeCircuit<LC>::Public u;
       typename AgeCircuit<LC>::Private w;
       u.input(lc);
@@ -702,7 +713,8 @@ class MlDsaCredential {
   }
 
   std::unique_ptr<Circuit<Field>> make_lwe() const {
-    return compile(1, [this](const LC& lc, QuadCircuit<Field>& Q) {
+    return compile("lwe_" + object_tag(lwe_), 1,
+                   [this](const LC& lc, QuadCircuit<Field>& Q) {
       auto u = std::make_unique<typename Lwec::Public>();
       auto w = std::make_unique<typename Lwec::Private>();
       u->input(lc);

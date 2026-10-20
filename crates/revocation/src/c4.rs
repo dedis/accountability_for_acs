@@ -137,7 +137,14 @@ mod tests {
         let sig = sign(&poseidon, scheme, &sk, t, d2, &mut rng).unwrap();
 
         assert!(verify(&poseidon, scheme, id_u, t, d2, &sig));
-        assert!(!verify(&poseidon, scheme, id_u, t + Fr::from(1u64), d2, &sig));
+        assert!(!verify(
+            &poseidon,
+            scheme,
+            id_u,
+            t + Fr::from(1u64),
+            d2,
+            &sig
+        ));
     }
 
     #[test]

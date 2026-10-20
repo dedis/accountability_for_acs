@@ -178,7 +178,12 @@ impl<P: PqSig> Scheme for PqC4<P> {
     fn keygen<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<(Point, P::SigningKey)> {
         let (pk, sk) = P::keygen()?;
         let id_u = base8() * rand_scalar(rng);
-        match self.registry.lock().expect("registry lock").entry(id_u.into_affine()) {
+        match self
+            .registry
+            .lock()
+            .expect("registry lock")
+            .entry(id_u.into_affine())
+        {
             Entry::Occupied(_) => bail!("identity already registered"),
             Entry::Vacant(slot) => slot.insert(pk),
         };
@@ -237,7 +242,9 @@ mod tests {
         let poseidon = Poseidon::new();
         let msg = Fq::from(7u64);
         let (id, sk) = scheme.keygen(&mut StdRng::seed_from_u64(1)).unwrap();
-        let sig = scheme.sign(&poseidon, &sk, msg, &mut rand::thread_rng()).unwrap();
+        let sig = scheme
+            .sign(&poseidon, &sk, msg, &mut rand::thread_rng())
+            .unwrap();
         assert!(scheme.keygen(&mut StdRng::seed_from_u64(1)).is_err());
         assert!(scheme.verify(&poseidon, id.into_affine(), msg, &sig));
     }

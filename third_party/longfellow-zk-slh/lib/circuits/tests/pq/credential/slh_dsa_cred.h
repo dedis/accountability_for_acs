@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -45,6 +46,7 @@
 #include "circuits/compiler/compiler.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#include "circuits/tests/pq/circuit_cache.h"
 #include "circuits/tests/pq/credential/age.h"
 #include "circuits/tests/pq/credential/credential.h"
 #include "circuits/tests/pq/credential/lwe.h"
@@ -130,16 +132,15 @@ class SlhDsaCredential {
     nstep_[0] = b.kind[0].size();
     nstep_[1] = b.kind[1].size();
     for (size_t one = 0; one < 2; ++one) {
-      auto make = [&](size_t nc) {
-        return one ? Zk::make_circuit1(nc) : Zk::make_circuit(nc);
-      };
+      auto make = [&](size_t nc) { return Zk::stored_circuit(nc, one); };
       if (nstep_[one] >= kStepChunk) step_full_[one] = make(kStepChunk);
       if (nstep_[one] % kStepChunk != 0) {
         step_last_[one] = make(nstep_[one] % kStepChunk);
       }
     }
     sponge_ = make_sponge<Field, LC>(f_, b.sponge.copies().size());
-    age_ = compile<Field, LC>(f_, 1, [](const LC& lc, QuadCircuit<Field>& Q) {
+    age_ = compile<Field, LC>(f_, "age", 1, [](const LC& lc,
+                                               QuadCircuit<Field>& Q) {
       typename AgeCircuit<LC>::Public u;
       typename AgeCircuit<LC>::Private w;
       u.input(lc);
@@ -159,7 +160,8 @@ class SlhDsaCredential {
       build_q(show, nullptr, bq);
       sponge_q_ = make_sponge<FieldQ, LCQ>(fq_, bq.sponge.copies().size());
       lwec_ = compile<FieldQ, LCQ>(
-          fq_, 1, [this](const LCQ& lc, QuadCircuit<FieldQ>& Q) {
+          fq_, "lwe_" + object_tag(lwe_), 1,
+          [this](const LCQ& lc, QuadCircuit<FieldQ>& Q) {
             auto u = std::make_unique<typename Lwec::Public>();
             auto w = std::make_unique<typename Lwec::Private>();
             u->input(lc);
@@ -515,7 +517,7 @@ class SlhDsaCredential {
 
   template <class F, class L>
   static std::unique_ptr<Circuit<F>> make_sponge(const F& f, size_t nc) {
-    return compile<F, L>(f, nc, [](const L& lc, QuadCircuit<F>& Q) {
+    return compile<F, L>(f, "sponge", nc, [](const L& lc, QuadCircuit<F>& Q) {
       typename SpongeStep<L>::Public u;
       typename SpongeStep<L>::Private w;
       Sponge<F>::inputs(lc, Q, u, w);
@@ -524,14 +526,20 @@ class SlhDsaCredential {
     });
   }
 
+  // The circuit NAME of BODY for NC copies, stored once with
+  // PQ_CIRCUIT_CACHE (circuit_cache.h).
   template <class F, class L, class Body>
-  static std::unique_ptr<Circuit<F>> compile(const F& f, size_t nc,
-                                             const Body& body) {
-    QuadCircuit<F> Q(f);
-    const CompilerBackend<F> cbk(&Q);
-    const L lc(&cbk, f);
-    body(lc, Q);
-    return Q.mkcircuit(nc);
+  static std::unique_ptr<Circuit<F>> compile(const F& f,
+                                             const std::string& name,
+                                             size_t nc, const Body& body) {
+    return cached_circuit(f, "slh_cred_" + name + "_nc" + std::to_string(nc),
+                          [&] {
+                            QuadCircuit<F> Q(f);
+                            const CompilerBackend<F> cbk(&Q);
+                            const L lc(&cbk, f);
+                            body(lc, Q);
+                            return Q.mkcircuit(nc);
+                          });
   }
 
   template <class F>

@@ -26,6 +26,7 @@
 #include "circuits/tests/pq/ml_dsa/ml_dsa_ref.h"
 #include "circuits/tests/pq/ml_dsa/ml_dsa_shared.h"
 #include "random/secure_random_engine.h"
+#include "random/transcript.h"
 #include "util/crypto.h"
 #include "util/log.h"
 #include "util/panic.h"
@@ -66,9 +67,10 @@ class MlDsaHarness {
 
  public:
   MlDsaHarness() : issuer_(kMlDsaName), user_(kMlDsaName) {
-    std::array<uint8_t, 32> seed;
-    rng_.bytes(seed.data(), seed.size());
-    Lwe<LP>::keygen(seed, rng_, lwe_pub_, lwe_sec_);
+    // One fixed key of the CFT authority, so that its encryption circuit
+    // is compiled once (circuit_cache.h).
+    Transcript authority((uint8_t*)"cft authority", 13);
+    Lwe<LP>::keygen(std::array<uint8_t, 32>{}, authority, lwe_pub_, lwe_sec_);
     cred_ = std::make_unique<Cred>(lwe_pub_);
     const Timestamps ts = timestamps();
     id_ = shake256(user_.pk(), kIdBytes);
@@ -132,9 +134,10 @@ class SlhHarness {
 
  public:
   explicit SlhHarness(const char* name) : issuer_(name), user_(name) {
-    std::array<uint8_t, 32> seed;
-    rng_.bytes(seed.data(), seed.size());
-    Lwe<LP>::keygen(seed, rng_, lwe_pub_, lwe_sec_);
+    // One fixed key of the CFT authority, so that its encryption circuit
+    // is compiled once (circuit_cache.h).
+    Transcript authority((uint8_t*)"cft authority", 13);
+    Lwe<LP>::keygen(std::array<uint8_t, 32>{}, authority, lwe_pub_, lwe_sec_);
     cred_ = std::make_unique<Cred>(lwe_pub_);
     const Timestamps ts = timestamps();
     id_ = shake256(user_.pk(), kIdBytes);

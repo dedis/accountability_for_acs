@@ -247,14 +247,14 @@ class MLDSAVerify {
 
   void assert_ntt(const RqW& c, const RqW& cprime) const {
     std::vector<EltW> p(c.coeffs.begin(), c.coeffs.end());
-    int k = 1;
-    int length = ml_dsa::N / 2;
+    size_t k = 1;
+    size_t length = ml_dsa::N / 2;
     while (length > 0) {
-      for (int start = 0; start < ml_dsa::N; start += 2 * length) {
+      for (size_t start = 0; start < ml_dsa::N; start += 2 * length) {
         auto zeta = lc_.f_.of_scalar_field(ml_dsa::kZetas[k]);
         auto neg_zeta = lc_.f_.negf(zeta);
         k++;
-        for (int j = start; j < start + length; ++j) {
+        for (size_t j = start; j < start + length; ++j) {
           auto t = lc_.axpy(p[j], zeta, p[j + length]);
           p[j + length] = lc_.axpy(p[j], neg_zeta, p[j + length]);
           p[j] = t;
@@ -269,13 +269,13 @@ class MLDSAVerify {
 
   void assert_inverse_ntt(const RqW& c, const RqW& cprime) const {
     std::vector<EltW> p(c.coeffs.begin(), c.coeffs.end());
-    int k = 256;
-    int length = 1;
+    size_t k = 256;
+    size_t length = 1;
     while (length < ml_dsa::N) {
-      for (int start = 0; start < ml_dsa::N; start += 2 * length) {
+      for (size_t start = 0; start < ml_dsa::N; start += 2 * length) {
         k--;
         auto neg_zeta = lc_.f_.negf(lc_.f_.of_scalar_field(ml_dsa::kZetas[k]));
-        for (int j = start; j < start + length; ++j) {
+        for (size_t j = start; j < start + length; ++j) {
           auto t = p[j];
           p[j] = lc_.add(t, p[j + length]);
           auto diff = lc_.sub(t, p[j + length]);

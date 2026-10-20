@@ -6,7 +6,8 @@
 //
 // The statement is upstream's: a valid ML-DSA signature on a private mu,
 // under a public key. The circuit is that of make_ml_dsa_circuit in
-// ml_dsa_circuit_test.cc. The proof field and the Ligero queries (rate 4)
+// ml_dsa_circuit_test.cc, stored once with PQ_CIRCUIT_CACHE
+// (circuit_cache.h). The proof field and the Ligero queries (rate 4)
 // follow the NIST category (MlDsaZkCategory3, MlDsaZkCategory5 below).
 
 #ifndef PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_ML_DSA_ML_DSA_ZK_HARNESS_H_
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -32,6 +34,7 @@
 #include "circuits/compiler/compiler.h"
 #include "circuits/logic/compiler_backend.h"
 #include "circuits/logic/logic.h"
+#include "circuits/tests/pq/circuit_cache.h"
 #include "circuits/tests/pq/ml_dsa/ml_dsa_circuit.h"
 #include "circuits/tests/pq/ml_dsa/ml_dsa_shared.h"
 #include "circuits/tests/pq/ml_dsa/ml_dsa_witness.h"
@@ -205,7 +208,9 @@ class MlDsaZkHarness {
  private:
   const Field f_{ml_dsa::Fq(), kBeta};
   const MlDsaRs<Field> rs_{ml_dsa::Fq()};
-  const std::unique_ptr<Circuit<Field>> circuit_ = make_circuit(f_);
+  const std::unique_ptr<Circuit<Field>> circuit_ = cached_circuit(
+      f_, "ml_dsa_zk_k" + std::to_string(Params::K),
+      [this] { return make_circuit(f_); });
   const std::vector<uint8_t> pkey_, sig_, msg_, ctx_;
   SecureRandomEngine rng_;
   std::unique_ptr<ZkProof<Field>> zkpr_;

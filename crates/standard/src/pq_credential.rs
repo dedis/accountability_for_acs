@@ -58,14 +58,38 @@ macro_rules! scheme {
 scheme!("ML-DSA-65", "MLDSA", "ml_dsa65", "pq_credential_test");
 #[cfg(all(not(feature = "slh-dsa"), feature = "level-5"))]
 scheme!("ML-DSA-87", "MLDSA", "ml_dsa87", "pq_credential_5_test");
-#[cfg(all(feature = "slh-dsa", not(feature = "slh-dsa-f"), not(feature = "level-5")))]
-scheme!("SLH-DSA-SHAKE-192s", "SLHs", "slh_dsa_shake_192s", "pq_credential_test");
+#[cfg(all(
+    feature = "slh-dsa",
+    not(feature = "slh-dsa-f"),
+    not(feature = "level-5")
+))]
+scheme!(
+    "SLH-DSA-SHAKE-192s",
+    "SLHs",
+    "slh_dsa_shake_192s",
+    "pq_credential_test"
+);
 #[cfg(all(feature = "slh-dsa", not(feature = "slh-dsa-f"), feature = "level-5"))]
-scheme!("SLH-DSA-SHAKE-256s", "SLHs", "slh_dsa_shake_256s", "pq_credential_5_test");
+scheme!(
+    "SLH-DSA-SHAKE-256s",
+    "SLHs",
+    "slh_dsa_shake_256s",
+    "pq_credential_5_test"
+);
 #[cfg(all(feature = "slh-dsa-f", not(feature = "level-5")))]
-scheme!("SLH-DSA-SHAKE-192f", "SLHf", "slh_dsa_shake_192f", "pq_credential_test");
+scheme!(
+    "SLH-DSA-SHAKE-192f",
+    "SLHf",
+    "slh_dsa_shake_192f",
+    "pq_credential_test"
+);
 #[cfg(all(feature = "slh-dsa-f", feature = "level-5"))]
-scheme!("SLH-DSA-SHAKE-256f", "SLHf", "slh_dsa_shake_256f", "pq_credential_5_test");
+scheme!(
+    "SLH-DSA-SHAKE-256f",
+    "SLHf",
+    "slh_dsa_shake_256f",
+    "pq_credential_5_test"
+);
 
 #[cfg(test)]
 mod tests {

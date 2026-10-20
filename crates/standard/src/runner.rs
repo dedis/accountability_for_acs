@@ -9,6 +9,9 @@ use anyhow::{bail, Context, Result};
 use crate::gbench::{self, Row};
 use crate::paths::{self, Tree};
 
+/// Directory of the compiled circuits of the post-quantum proofs.
+const CIRCUIT_CACHE: &str = "PQ_CIRCUIT_CACHE";
+
 /// One benchmark binary plus the flags shared by its warm-up and measured runs.
 pub struct Gbench {
     pub bin: PathBuf,
@@ -59,6 +62,18 @@ impl Gbench {
         args
     }
 
+    /// The binary with `PQ_CIRCUIT_CACHE` (default: `pq-circuits` in the
+    /// temporary directory), so that the post-quantum proofs compile their
+    /// circuits in the warm-up and load them in the measured run
+    /// (`third_party/longfellow-zk*/lib/circuits/tests/pq/circuit_cache.h`).
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        if std::env::var_os(CIRCUIT_CACHE).is_none() {
+            cmd.env(CIRCUIT_CACHE, std::env::temp_dir().join("pq-circuits"));
+        }
+        cmd
+    }
+
     /// One discarded repetition with the same filter and min_time.
     pub fn warmup(&self, quiet: bool) -> Result<()> {
         let out = temp_report("longfellow-warm");
@@ -68,7 +83,7 @@ impl Gbench {
                  Live console; JSON is written to a temp file and discarded.\n"
             );
         }
-        Command::new(&self.bin)
+        self.command()
             .args(self.args_with(&out, Some(1)))
             .status()
             .with_context(|| format!("run {}", self.bin.display()))?;
@@ -82,7 +97,8 @@ impl Gbench {
     /// The measured run; the console output streams, the JSON is parsed after.
     pub fn measured(&self) -> Result<(Vec<Row>, Option<i32>)> {
         let out = temp_report("longfellow-gbench");
-        let status = Command::new(&self.bin)
+        let status = self
+            .command()
             .args(self.args_with(&out, None))
             .status()
             .with_context(|| format!("run {}", self.bin.display()))?;

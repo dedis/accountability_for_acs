@@ -8,7 +8,9 @@ use standard::driver;
 use standard::pq_credential::CFT;
 
 #[derive(Parser)]
-#[command(about = "Longfellow prove/verify benchmark for the post-quantum age-check + CFT presentation")]
+#[command(
+    about = "Longfellow prove/verify benchmark for the post-quantum age-check + CFT presentation"
+)]
 struct Args {
     /// Google Benchmark filter regex.
     #[arg(long)]

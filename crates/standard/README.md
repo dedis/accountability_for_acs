@@ -84,6 +84,7 @@ also reads its environment variable:
 | `BENCH_FILTER` | `--filter` | per benchmark | Google Benchmark filter regex |
 | `BENCH_METRIC` | `--metric` | `both` | `--verbose` timing column |
 | `BENCH_WARMUP` | — | on | `0`/`false`/`no` skips the discarded repetition |
+| `PQ_CIRCUIT_CACHE` | — | `pq-circuits` in the temporary directory | Compiled circuits of the post-quantum proofs: the warm-up stores them, the measured run loads them |
 | `CLEAN` | `--clean` | off | Empty the output directory first |
 | `REVOC_LOG2_LIST` / `REVOC_LOG2` | `--revoc-log2` | `12,16,20,24` | Revocation population scales; `REVOC_LOG2_LIST` takes precedence |
 | `TOTAL_ATTRS` | `--total-attrs` / `--attr` | `8,16,32,64` | merkle-vs-flat: credential sizes \(n\) |

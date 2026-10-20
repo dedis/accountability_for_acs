@@ -89,6 +89,16 @@ the soundness bounds.
 - The links are 12 bytes per term (`LigeroUnitTerm`: every coefficient is
   +-1), passed to Ligero without copies; the statement is freed once the
   inputs are filled; an SLH-DSA copy keeps only the last Keccak-f state.
+- Circuits are compiled once (`../circuit_cache.h`, `circuit_cache_test`):
+  with `PQ_CIRCUIT_CACHE` set to a directory, a program stores each
+  circuit it compiles (`proto/circuit_writer.h`) and later processes load
+  it (`proto/circuit_reader.h`, circuit ID checked). The file name holds the
+  copies, the values compiled into the circuit (the LWE public key) and a
+  hash of the executable, so another build never loads it. Compiling a
+  circuit takes several times the memory of the proof; the Rust drivers set
+  the variable, so the warm-up compiles and the measured run loads. The
+  benchmarks use one fixed LWE authority key, so its circuit is compiled
+  once.
 
 ## Compute
 
@@ -152,8 +162,7 @@ Not done: multithreading (excluded); the hybrid ML-DSA proof (Keccak in a
 binary field, a new cross-field link that needs its own soundness
 argument); a smaller Ligero rate, a larger `block_enc` and Fq^11 (fewer
 soundness bits); an SLH-DSA "s" issuer key (another parameter set);
-precompiled circuits (they cut setup, which is not timed); two-valued
-Fq wires stored as bits (96% of the base wires of the ML-DSA sponge, about
+two-valued Fq wires stored as bits (96% of the base wires of the ML-DSA sponge, about
 5% of its proving time by the profiles); a GF(2^16) FFT for the subfield
 rows and a pruned FFT for the opened columns (about 28% of the SLH-DSA
 verifier's encoding).
@@ -178,7 +187,10 @@ Changes outside this directory:
 | `algebra/fft.h`, `algebra/crt_convolution.h` | Twiddles and buffers kept by the convolution |
 | `random/transcript.h` | `write_each`: many field elements in few hash updates |
 | `../slh_dsa/slh_dsa.h` | External key and message bits (`Bit::kExt`); a public signature as private bits fixed to their values (`Bit::kFixed`); a copy keeps only the round-23 Keccak-f state; one-block copies (`Layout1`, `one_block`) |
-| `../slh_dsa/slh_dsa_circuit.h`, `../slh_dsa/slh_dsa_zk.h` | `OneBlockStepCircuit`; its inputs and circuit (`fill_public1`, `fill_private1`, `make_circuit1`) |
+| `../slh_dsa/slh_dsa_circuit.h`, `../slh_dsa/slh_dsa_zk.h` | `OneBlockStepCircuit`; its inputs and circuit (`fill_public1`, `fill_private1`, `make_circuit1`); circuits stored once (`stored_circuit`) |
+| `../circuit_cache.h` | New: circuits compiled once and stored (`cached_circuit`, `PQ_CIRCUIT_CACHE`) |
+| `proto/circuit_io.h` | Field IDs of Fq^12, GF(2^256) and GF(2^384) |
+| `../ml_dsa/ml_dsa_zk_harness.h` | The circuit stored once (`cached_circuit`) |
 | `../ml_dsa/ml_dsa_circuit.h` | `w'_approx` checked with a forward NTT; unsigned loop indices (no `-Wsign-compare` warning) |
 | `../ml_dsa/ml_dsa_witness.h` | Signed casts (no `-Wsign-compare` warning) |
 
@@ -188,12 +200,14 @@ Changes outside this directory:
 cmake -S third_party/longfellow-zk-slh/lib -B .work/standard/longfellow-slh-build \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build .work/standard/longfellow-slh-build -j 8 \
-  --target zk_multi_test sponge_test checkpoint_test pq_credential_test \
-           pq_credential_5_test
+  --target zk_multi_test sponge_test checkpoint_test circuit_cache_test \
+           pq_credential_test pq_credential_5_test
 B=.work/standard/longfellow-slh-build/circuits/tests/pq/credential
-$B/zk_multi_test && $B/sponge_test && $B/checkpoint_test
+$B/zk_multi_test && $B/sponge_test && $B/checkpoint_test && $B/circuit_cache_test
 $B/pq_credential_test          # category 3: ML-DSA-65, SLH-DSA-SHAKE-192s
-$B/pq_credential_test --benchmark_filter='BM_Combined_PQCred_MLDSA_Cft$' --benchmark_min_time=1x
+# The first run compiles and stores the circuits, the next ones load them.
+PQ_CIRCUIT_CACHE=/tmp/pq-circuits \
+  $B/pq_credential_test --benchmark_filter='BM_Combined_PQCred_MLDSA_Cft$' --benchmark_min_time=1x
 ```
 
 `pq_credential_test` has 48-byte digests (ML-DSA-65, SLH-DSA-SHAKE-192s,
