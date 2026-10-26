@@ -284,7 +284,7 @@ std::optional<std::array<std::array<bool, N>, Params::K>> HintBitUnpack(
 
   size_t index = 0;
   for (size_t i = 0; i < Params::K; ++i) {
-    int limit = y[Params::omega + i];
+    size_t limit = y[Params::omega + i];
     if (limit < index || limit > Params::omega) return std::nullopt;
 
     int last = -1;

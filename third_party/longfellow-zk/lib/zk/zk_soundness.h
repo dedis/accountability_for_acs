@@ -20,6 +20,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 #include "ligero/ligero_param.h"
 #include "sumcheck/circuit.h"
@@ -30,17 +31,22 @@ struct ZkSoundness {
   double sumcheck, proximity, field, linear, total;
 };
 
+// Proof of the circuits C (several for zk/zk_multi.h) over one commitment
+// with Ligero parameters P: the sumcheck terms add up over the circuits.
 template <class Field>
-ZkSoundness zk_soundness(const Circuit<Field>& c, const LigeroParam<Field>& p,
-                         double log2_field) {
+ZkSoundness zk_soundness(const std::vector<const Circuit<Field>*>& cs,
+                         const LigeroParam<Field>& p, double log2_field) {
   // log2 of the binomial coefficient C(n, k).
   auto lc = [](double n, double k) {
     return (std::lgamma(n + 1) - std::lgamma(k + 1) - std::lgamma(n - k + 1)) /
            std::log(2.0);
   };
-  double degrees = 1;  // the random combination of the input binding
-  for (size_t ly = 0; ly < c.nl; ++ly) {
-    degrees += 3.0 * c.logc + 4.0 * c.l[ly].logw + 2;
+  double degrees = 0;
+  for (const Circuit<Field>* c : cs) {
+    degrees += 1;  // the random combination of the input binding
+    for (size_t ly = 0; ly < c->nl; ++ly) {
+      degrees += 3.0 * c->logc + 4.0 * c->l[ly].logw + 2;
+    }
   }
   const double n = p.block_enc - p.dblock, k = p.block, t = p.nreq;
   const double e_sum = degrees * std::exp2(-log2_field);
@@ -51,6 +57,12 @@ ZkSoundness zk_soundness(const Circuit<Field>& c, const LigeroParam<Field>& p,
   return ZkSoundness{-std::log2(e_sum), -std::log2(e_prox),
                      -std::log2(e_field), -std::log2(e_lin),
                      -std::log2(e_sum + e_prox + e_field + 2 * e_lin)};
+}
+
+template <class Field>
+ZkSoundness zk_soundness(const Circuit<Field>& c, const LigeroParam<Field>& p,
+                         double log2_field) {
+  return zk_soundness(std::vector<const Circuit<Field>*>{&c}, p, log2_field);
 }
 
 }  // namespace proofs

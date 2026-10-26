@@ -25,6 +25,7 @@
 #include "merkle/merkle_tree.h"
 #include "random/random.h"
 #include "util/crypto.h"
+#include "util/panic.h"
 
 namespace proofs {
 
@@ -60,6 +61,22 @@ class MerkleCommitment {
       mt_.set_leaf(i, dig);
     }
 
+    return mt_.build_tree();
+  }
+
+  // For a caller that hashes the leaves itself (not upstream): draw the
+  // nonces as commit() does, hash leaf i as H(nonce[i] || ...), then
+  // commit_leaves().
+  const std::vector<MerkleNonce> &draw_nonces(RandomEngine &rng) {
+    for (size_t i = 0; i < n_; ++i) {
+      rng.bytes(nonce_[i].bytes, MerkleNonce::kLength);
+    }
+    return nonce_;
+  }
+
+  Digest commit_leaves(const std::vector<Digest> &leaves) {
+    check(leaves.size() == n_, "one leaf per column");
+    for (size_t i = 0; i < n_; ++i) mt_.set_leaf(i, leaves[i]);
     return mt_.build_tree();
   }
 

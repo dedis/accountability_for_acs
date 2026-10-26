@@ -17,12 +17,14 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 #include "algebra/convolution.h"
 #include "algebra/fft.h"
+#include "algebra/twiddle.h"
 
 namespace proofs {
 
@@ -44,7 +46,15 @@ class CRTConvolution {
         padding_(choose_padding(m)),
         y_fft_(padding_, crt_.zero()),
         omega_order_(crt_.omega_order()),
-        omega_(crt_.omega()) {
+        omega_(crt_.omega()),
+        // The roots of both transforms of size padding_, computed once
+        // (not upstream): fftf() is fftb() with the inverse root.
+        omega_f_(Twiddle<CRT>::reroot(crt_.invertf(omega_), omega_order_,
+                                      padding_, crt_)),
+        omega_b_(Twiddle<CRT>::reroot(omega_, omega_order_, padding_, crt_)),
+        roots_f_(FFT<CRT>::roots(padding_, omega_f_, crt_)),
+        roots_b_(FFT<CRT>::roots(padding_, omega_b_, crt_)),
+        x_fft_(padding_) {
     // Pre-compute the y coefficients in crt form.
     // Pre-scale Y by 1/N to compensate for the scaling in FFTB(FFTF(.))
     auto pni = crt_.invertf(crt_.to_crt(f.of_scalar(padding_)));
@@ -52,19 +62,21 @@ class CRTConvolution {
       y_fft_[i] = crt_.mulf(pni, crt_.to_crt(y[i]));
     }
 
-    FFT<CRT>::fftf(&y_fft_[0], padding_, omega_, omega_order_, crt_);
+    FFT<CRT>::fftb(&y_fft_[0], padding_, omega_f_, roots_f_, crt_);
   }
 
   // Computes (first m entries of) convolution of x with y, outputs in z:
   // z[k] = \sum_{i=0}^{n-1} x[i] y[k-i].
   // Note that y has already been FFT'd and divided by padding_ in constructor
+  // Not thread safe: uses one buffer (not upstream).
   void convolution(const Elt x[/*n_*/], Elt z[/*m_*/]) const {
-    std::vector<CRTElt> x_fft(padding_, crt_.zero());
+    std::vector<CRTElt>& x_fft = x_fft_;
+    std::fill(x_fft.begin(), x_fft.end(), crt_.zero());
     for (size_t i = 0; i < n_; ++i) {
       x_fft[i] = crt_.to_crt(x[i]);
     }
 
-    FFT<CRT>::fftf(&x_fft[0], padding_, omega_, omega_order_, crt_);
+    FFT<CRT>::fftb(&x_fft[0], padding_, omega_f_, roots_f_, crt_);
 
     // Pointwise multiplication.
     for (size_t i = 0; i < padding_; ++i) {
@@ -72,7 +84,7 @@ class CRTConvolution {
     }
 
     // Backward fft.
-    FFT<CRT>::fftb(&x_fft[0], padding_, omega_, omega_order_, crt_);
+    FFT<CRT>::fftb(&x_fft[0], padding_, omega_b_, roots_b_, crt_);
 
     // Convert back to field form
     for (size_t i = 0; i < m_; ++i) {
@@ -90,6 +102,9 @@ class CRTConvolution {
   std::vector<CRTElt> y_fft_;
   uint64_t omega_order_;
   CRTElt omega_;
+  CRTElt omega_f_, omega_b_;  // padding_-th roots of the two transforms
+  Twiddle<CRT> roots_f_, roots_b_;
+  mutable std::vector<CRTElt> x_fft_;
 };
 
 template <class CRT, class Field>

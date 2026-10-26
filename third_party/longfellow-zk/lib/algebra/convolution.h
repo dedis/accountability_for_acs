@@ -44,7 +44,7 @@ durations and can be safely passed by const reference.
 namespace proofs {
 
 // Returns the smallest power of 2 that is at least n.
-static size_t choose_padding(const size_t n) {
+inline size_t choose_padding(const size_t n) {
   size_t p = 1;
   while (p < n) {
     p *= 2;

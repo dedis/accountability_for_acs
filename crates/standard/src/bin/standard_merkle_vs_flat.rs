@@ -311,7 +311,6 @@ fn main() -> Result<()> {
     let bin = runner::resolve_bin(
         common.bin.clone(),
         &["LONGFELLOW_ATTR_BENCH_BIN"],
-        paths::Tree::Main,
         TEST_NAME,
     )?;
     let out_dir = common.out.dir(paths::STACK, "merkle_vs_flat");

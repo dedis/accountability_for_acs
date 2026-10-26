@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "arrays/dense.h"
+#include "arrays/packed_layer.h"
 #include "ligero/ligero_param.h"
 #include "ligero/ligero_verifier.h"
 #include "random/transcript.h"
@@ -45,7 +46,7 @@ class ZkVerifier {
   explicit ZkVerifier(const Circuit<Field>& c, const RSFactory& rsf,
                       size_t rate, size_t nreq, const Field& F)
       : circ_(c),
-        n_witness_(c.ninputs - c.npub_in),
+        n_witness_(ZkCommon<Field>::num_witness(c)),
         param_(n_witness_ + ZkCommon<Field>::pad_size(c), c.nl, rate, nreq),
         lqc_(c.nl),
         rsf_(rsf),
@@ -57,7 +58,7 @@ class ZkVerifier {
                       size_t rate, size_t nreq, size_t block_enc,
                       const Field& F)
       : circ_(c),
-        n_witness_(c.ninputs - c.npub_in),
+        n_witness_(ZkCommon<Field>::num_witness(c)),
         param_(n_witness_ + ZkCommon<Field>::pad_size(c), c.nl, rate, nreq,
                block_enc),
         lqc_(c.nl),
@@ -66,31 +67,76 @@ class ZkVerifier {
     ZkCommon<Field>::setup_lqc(c, lqc_, n_witness_);
   }
 
+  static size_t copies(const Dense<Field>& d) { return d.n0_; }
+  static size_t wires(const Dense<Field>& d) { return d.n1_; }
+  static size_t copies(const PackedLayer<Field>& d) { return d.n0(); }
+  static size_t wires(const PackedLayer<Field>& d) { return d.n1(); }
+
   void recv_commitment(const ZkProof<Field>& zk, Transcript& t) const {
     log(INFO, "verifier: recv commit");
     LigeroVerifier<Field, RSFactory>::receive_commitment(zk.com, t);
   }
 
-  // Verifies the proof.
-  bool verify(const ZkProof<Field>& zk, const Dense<Field>& pub,
-              Transcript& tv) const {
+  // Verifies the proof. PUB holds exactly the public inputs of every copy
+  // (npub_in wires), in the prover's Dense layout: a Dense or a PackedLayer
+  // (not upstream). EXTRA: the statement constraints the prover used (not
+  // upstream).
+  template <class Pub>
+  bool verify(const ZkProof<Field>& zk, const Pub& pub, Transcript& tv,
+              const typename ZkCommon<Field>::ExtraConstraints* extra =
+                  nullptr) const {
     log(INFO, "verifier: verify");
+    if (copies(pub) != circ_.nc || wires(pub) != circ_.npub_in) {
+      log(INFO, "verifier: public inputs do not match the circuit copies");
+      return false;
+    }
+    if (extra != nullptr && !ZkCommon<Field>::extra_valid(*extra, circ_)) {
+      log(INFO, "verifier: extra constraint index out of range");
+      return false;
+    }
 
     ZkCommon<Field>::initialize_sumcheck_fiat_shamir(tv, circ_, pub, f_);
+
+    const LigeroHash hash_of_A =
+        extra != nullptr ? ZkCommon<Field>::extra_hash(*extra, f_)
+                         : LigeroHash{0xde, 0xad, 0xbe, 0xef};
+    const size_t nrows = circ_.nl + 1 + (extra != nullptr ? extra->b.size() : 0);
+
+    // Not upstream: check the Merkle openings on a copy of the transcript
+    // first, so that a bad commitment or opening is rejected before the
+    // constraint list (up to 2 GB) is built.
+    {
+      Transcript probe = tv.clone();
+      ZkCommon<Field>::replay_sumcheck(circ_, zk.proof, probe, f_);
+      if (!LigeroVerifier<Field, RSFactory>::check_openings(
+              param_, zk.com, zk.com_proof, probe, nrows, hash_of_A, f_)) {
+        log(INFO, "verifier: merkle_check failed");
+        return false;
+      }
+    }
 
     // Derive constraints on the witness.
     using Llc = LigeroLinearConstraint<Field>;
     std::vector<Llc> A;
     std::vector<Elt> b;
-    const LigeroHash hash_of_A{0xde, 0xad, 0xbe, 0xef};
-    size_t cn = ZkCommon<Field>::verifier_constraints(circ_, pub, zk.proof,
-                                                      /*aux=*/nullptr, A, b, tv,
-                                                      n_witness_, f_);
+    A.reserve(ZkCommon<Field>::num_terms(circ_));
+    b.reserve(circ_.nl + 1);
+    LigeroProductRow<Field> row;
+    size_t cn = ZkCommon<Field>::verifier_constraints(
+        circ_, pub, zk.proof, /*aux=*/nullptr, A, b, row, tv, n_witness_, f_);
+    LigeroUnitSpan<Field> units;
+    units.row_offset = cn;
+    if (extra != nullptr) {
+      units = {extra->a.data(), extra->a.size(), cn, extra->b.data()};
+      cn += extra->b.size();
+    }
+    check(cn == nrows, "constraint rows");
 
     const char* why = "";
+    const LigeroTermSpan<Field> span{A.data(), A.size(), 0};
     bool ok = LigeroVerifier<Field, RSFactory>::verify(
-        &why, param_, zk.com, zk.com_proof, tv, cn, A.size(), &A[0], hash_of_A,
-        &b[0], &lqc_[0], rsf_, f_);
+        &why, param_, zk.com, zk.com_proof, tv, cn, &span, 1, units, hash_of_A,
+        b.data(), &lqc_[0], rsf_, f_, &row, 1);
 
     log(INFO, "verify done: %s", why);
     return ok;

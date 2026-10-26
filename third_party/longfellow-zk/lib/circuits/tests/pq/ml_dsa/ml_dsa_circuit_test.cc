@@ -369,7 +369,7 @@ TYPED_TEST(MlDsaCircuitTest, AssertValidSignatureOnMu) {
       *env.circuit, env.rsextf, 4, 128, env.f);
   Transcript tv((uint8_t*)"test", 4);
   verifier.recv_commitment(*env.zkpr, tv);
-  Dense<Field6> pub(1, env.circuit->ninputs);
+  Dense<Field6> pub(1, env.circuit->npub_in);
   DenseFiller<Field6> vfiller(pub);
   vfiller.push_back(env.f.one());
   env.witness_gen.fill_pk(vfiller, env.f);

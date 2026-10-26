@@ -1,4 +1,4 @@
-//! The post-quantum credential proof (`third_party/longfellow-zk-slh`,
+//! The post-quantum credential proof (`third_party/longfellow-zk`,
 //! `lib/circuits/tests/pq/credential`) for the signature chosen at compile
 //! time: the issuer signature and the hardware (no CFT) or C4 (CFT)
 //! signature are ML-DSA or SLH-DSA, every hash is SHAKE256, and the CFT
@@ -15,14 +15,13 @@
 //! | `slh-dsa-f`, `level-5` | SLH-DSA-SHAKE-256f | `pq_credential_5_test` |
 
 use crate::driver::Bench;
-use crate::paths::Tree;
 
 macro_rules! scheme {
     ($name:literal, $tag:literal, $variant:literal, $program:literal) => {
         /// The CFT presentation.
         pub const CFT: Bench = Bench {
             backend: concat!(
-                "Longfellow (longfellow-zk-slh) - ",
+                "Longfellow - ",
                 $program,
                 " (PQ credential with CFT: ",
                 $name,
@@ -30,7 +29,6 @@ macro_rules! scheme {
             ),
             variant: concat!("pq_prove_verify_", $variant),
             default_filter: concat!("BM_Combined_PQCred_", $tag, "_Cft$"),
-            tree: Tree::Slh,
             test_name: concat!("circuits/tests/pq/credential/", $program),
             bin_env: &["LONGFELLOW_PQ_CREDENTIAL_BENCH_BIN"],
             sign: None,
@@ -38,7 +36,7 @@ macro_rules! scheme {
         /// The presentation without CFT.
         pub const NO_CFT: Bench = Bench {
             backend: concat!(
-                "Longfellow (longfellow-zk-slh) - ",
+                "Longfellow - ",
                 $program,
                 " (PQ credential without CFT: ",
                 $name,
@@ -46,7 +44,6 @@ macro_rules! scheme {
             ),
             variant: concat!("pq_prove_verify_no_cft_", $variant),
             default_filter: concat!("BM_Combined_PQCred_", $tag, "_NoCft$"),
-            tree: Tree::Slh,
             test_name: concat!("circuits/tests/pq/credential/", $program),
             bin_env: &["LONGFELLOW_PQ_CREDENTIAL_BENCH_BIN"],
             sign: None,

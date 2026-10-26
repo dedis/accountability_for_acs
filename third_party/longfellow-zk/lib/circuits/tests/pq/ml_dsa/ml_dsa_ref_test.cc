@@ -229,7 +229,8 @@ bool VerifySignature(const std::vector<uint8_t>& pkey,
       uint64_t val = Fq.from_montgomery(e).limb_[0];
       int64_t sval = static_cast<int64_t>(val);
       if (sval > Q / 2) sval -= Q;
-      if (std::abs(sval) >= Params::gamma_1 - Params::beta) {
+      if (static_cast<uint64_t>(std::abs(sval)) >=
+          Params::gamma_1 - Params::beta) {
         return false;
       }
     }
@@ -503,7 +504,6 @@ TYPED_TEST(MlDsaRefTest, HintBitUnpackDuplicateZeroRejected) {
 }
 
 TYPED_TEST(MlDsaRefTest, PreprocessMessageContextTooLongRejected) {
-  using Params = typename TestFixture::Params;
   std::vector<uint8_t> msg = {1, 2, 3};
   std::vector<uint8_t> ctx(256, 0);  // 256 bytes context
 

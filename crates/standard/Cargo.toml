@@ -12,8 +12,8 @@ default = ["pq"]
 # The signature features are forwarded to revocation, whose signer
 # (revocation::pq_sig::Selected) standard_signature times.
 pq = ["dep:revocation", "revocation/pq"]
-# Signature scheme of standard_signature: ML-DSA by default, SLH-DSA (in
-# third_party/longfellow-zk-slh) with this feature.
+# Signature scheme of standard_signature: ML-DSA by default, SLH-DSA with
+# this feature.
 slh-dsa = ["pq", "revocation/slh-dsa"]
 # NIST security category of standard_signature: 3 by default, 5 with this
 # feature.

@@ -53,7 +53,8 @@ class Fp24 {
     bool operator!=(const Elt& y) const { return !operator==(y); }
   };
 
-  explicit Fp24(uint32_t modulus) : m_(modulus), exact_bits_(kBits) {
+  explicit Fp24(uint32_t modulus)
+      : m_(modulus), barrett_(~uint64_t(0) / modulus), exact_bits_(kBits) {
     check(modulus <= 0xffffff, "modulus exceeds 24 bits");
 
     // Compute the exact number of bits in the modulus.
@@ -133,7 +134,7 @@ class Fp24 {
   }
 
   void mul(uint32_t& x, const Elt& y) const {
-    x = (static_cast<uint64_t>(x) * static_cast<uint64_t>(y.n)) % m_;
+    x = reduce(static_cast<uint64_t>(x) * static_cast<uint64_t>(y.n)).n;
   }
   void mul(Elt& a, Elt y) const { mul(a.n, y); }
 
@@ -301,9 +302,19 @@ class Fp24 {
     check(false, "dot() not implemented");
     return zero();
   }
-  Elt reduce(uint64_t x) const { return Elt{static_cast<uint32_t>(x % m_)}; }
+  // X mod m by Barrett reduction (not upstream): with b = floor((2^64 - 1)
+  // / m), t = floor(X b / 2^64) is floor(X / m) or one less, so X - t m is
+  // below 2 m.
+  Elt reduce(uint64_t x) const {
+    const uint64_t t = static_cast<uint64_t>(
+        (static_cast<unsigned __int128>(x) * barrett_) >> 64);
+    const uint64_t r = x - t * m_;
+    return Elt{static_cast<uint32_t>(r >= m_ ? r - m_ : r)};
+  }
 
  private:
+  uint64_t barrett_;  // floor((2^64 - 1) / m_)
+
   // This method should only be used on static strings known at
   // compile time to be valid field elements.  We make it
   // private to prevent misuse.

@@ -14,18 +14,9 @@ cmake --build .work/standard/longfellow-build -j 8 --target \
   attr_commitment_experiment_test prove_verify_revocation_test \
   prove_verify_pq_test prove_verify_no_cft_pq_test \
   attr_commitment_experiment_pq_test prove_verify_revocation_pq_test \
-  ml_dsa_65_zk_test ml_dsa_87_zk_test
+  ml_dsa_65_zk_test ml_dsa_87_zk_test slh_dsa_zk_test slh_dsa_zk_5_test \
+  pq_credential_test pq_credential_5_test
 cargo build --release -p standard
-```
-
-`standard_signature` with the `slh-dsa` feature needs the SLH-DSA copy of
-Longfellow:
-
-```bash
-cmake -S third_party/longfellow-zk-slh/lib -B .work/standard/longfellow-slh-build \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build .work/standard/longfellow-slh-build -j 8 \
-  --target slh_dsa_zk_test slh_dsa_zk_5_test
 ```
 
 `slh_dsa_zk_test` proves the level-3 sets (192s, 192f) and `slh_dsa_zk_5_test`
@@ -90,7 +81,6 @@ also reads its environment variable:
 | `TOTAL_ATTRS` | `--total-attrs` / `--attr` | `8,16,32,64` | merkle-vs-flat: credential sizes \(n\) |
 | `USED_ATTRS` | `--used-attrs` / `--used-attr` | `1,2,4,8,16` | merkle-vs-flat: disclosed counts \(k\) (skipped when \(k>n\)) |
 | `LONGFELLOW_BUILD_DIR` | — | `.work/standard/longfellow-build` | Longfellow CMake build |
-| `LONGFELLOW_SLH_BUILD_DIR` | — | `.work/standard/longfellow-slh-build` | CMake build of the SLH-DSA copy |
 | `LONGFELLOW_HASH` | — | set by `standard_communication_size` | `measure/` scripts: `sha256` (classical targets) or `shake256` (`*_pq_test`) |
 | `LONGFELLOW_*_BENCH_BIN` | `--bin` | build path | Benchmark binary |
 | `BENCH_WORK_DIR` | — | `.work` | Scratch root |

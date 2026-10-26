@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 
 use crate::gbench::{self, Row};
-use crate::paths::{self, Tree};
+use crate::paths;
 
 /// Directory of the compiled circuits of the post-quantum proofs.
 const CIRCUIT_CACHE: &str = "PQ_CIRCUIT_CACHE";
@@ -117,11 +117,10 @@ fn temp_report(prefix: &str) -> PathBuf {
 }
 
 /// Resolves the benchmark binary: an explicit path, an environment override, or
-/// the build of the Longfellow tree TREE.
+/// the default Longfellow build tree.
 pub fn resolve_bin(
     explicit: Option<PathBuf>,
     env_names: &[&str],
-    tree: Tree,
     test_name: &str,
 ) -> Result<PathBuf> {
     if let Some(path) = explicit {
@@ -133,7 +132,7 @@ pub fn resolve_bin(
         }
     }
 
-    let default = paths::default_bin_path(tree, test_name);
+    let default = paths::default_bin_path(test_name);
     if default.is_file() {
         return Ok(default);
     }
@@ -142,9 +141,9 @@ pub fn resolve_bin(
          Build it first (see crates/standard/README.md): cmake -S {} -B {} && \
          cmake --build {} -j, or set {} / pass --bin PATH",
         default.display(),
-        tree.source().join("lib").display(),
-        tree.build_dir().display(),
-        tree.build_dir().display(),
+        paths::longfellow().join("lib").display(),
+        paths::build_dir().display(),
+        paths::build_dir().display(),
         env_names.join(" / ")
     );
 }

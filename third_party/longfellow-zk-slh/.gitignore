@@ -1,9 +1,0 @@
-# Local CMake / build trees
-/clang-build-release/
-/cmake-build-*/
-/build/
-/out/
-
-# Editor / tooling noise
-.DS_Store
-.cursor/debug*.log

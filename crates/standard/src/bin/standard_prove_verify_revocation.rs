@@ -95,12 +95,7 @@ fn scale_from_bench_name(name: &str) -> Option<u32> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let bin = runner::resolve_bin(
-        args.bin,
-        &["LONGFELLOW_REVOC_BENCH_BIN"],
-        paths::Tree::Main,
-        TEST_NAME,
-    )?;
+    let bin = runner::resolve_bin(args.bin, &["LONGFELLOW_REVOC_BENCH_BIN"], TEST_NAME)?;
     let out_dir = args.out.dir(paths::STACK, "prove_verify_revocation");
 
     let filter = args.filter.unwrap_or_else(|| {

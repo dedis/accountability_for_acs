@@ -1,3 +1,9 @@
+> **This copy (not upstream):** the vendored Longfellow, with ZK proofs over
+> circuit copies and experimental ML-DSA, SLH-DSA and post-quantum credential
+> proofs. See `lib/circuits/tests/pq/slh_dsa/README.md` and
+> `lib/circuits/tests/pq/credential/README.md` for the design, the changes to
+> the library and the results.
+
 # Longfellow ZK
 
 

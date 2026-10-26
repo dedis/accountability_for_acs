@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 
 use crate::cli::Common;
 use crate::gbench::{self, Meta};
-use crate::paths::{self, Tree};
+use crate::paths;
 use crate::runner::{self, Gbench};
 use bench_core::report;
 use bench_core::time;
@@ -27,8 +27,6 @@ pub struct Bench {
     /// `variant` field of the summary metadata, and the output folder name.
     pub variant: &'static str,
     pub default_filter: &'static str,
-    /// The Longfellow tree that builds the binary.
-    pub tree: Tree,
     /// Binary path relative to the Longfellow build tree.
     pub test_name: &'static str,
     /// Environment variables that may point at the binary, most specific first.
@@ -42,12 +40,7 @@ pub fn run(bench: &Bench, common: Common, filter: Option<String>) -> Result<()> 
         .or_else(|| std::env::var("BENCH_FILTER").ok().filter(|v| !v.is_empty()))
         .unwrap_or_else(|| bench.default_filter.to_string());
 
-    let bin = runner::resolve_bin(
-        common.bin.clone(),
-        bench.bin_env,
-        bench.tree,
-        bench.test_name,
-    )?;
+    let bin = runner::resolve_bin(common.bin.clone(), bench.bin_env, bench.test_name)?;
     let out_dir = common.out.dir(paths::STACK, bench.variant);
 
     if common.clean {

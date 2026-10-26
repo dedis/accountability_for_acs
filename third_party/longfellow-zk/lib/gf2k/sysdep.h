@@ -64,6 +64,15 @@ static inline gf2_128_elt_t gf2_128_mul(gf2_128_elt_t x, gf2_128_elt_t y) {
   t0 = gf2_128_reduce(t0, t1);
   return t0;
 }
+
+// The product T[0] + x^64 T[1] + x^128 T[2], unreduced (not upstream).
+static inline void gf2_128_mul_wide(gf2_128_elt_t x, gf2_128_elt_t y,
+                                    gf2_128_elt_t t[3]) {
+  t[0] = _mm_clmulepi64_si128(x, y, 0x00);
+  t[1] = gf2_128_add(_mm_clmulepi64_si128(x, y, 0x01),
+                     _mm_clmulepi64_si128(x, y, 0x10));
+  t[2] = _mm_clmulepi64_si128(x, y, 0x11);
+}
 }  // namespace proofs
 #elif defined(__aarch64__)
 //
@@ -119,6 +128,15 @@ static inline gf2_128_elt_t gf2_128_mul(gf2_128_elt_t x, gf2_128_elt_t y) {
   gf2_128_elt_t t0 = vmull_low(x, y);
   t0 = gf2_128_reduce(t0, t1);
   return t0;
+}
+
+// The product T[0] + x^64 T[1] + x^128 T[2], unreduced (not upstream).
+static inline void gf2_128_mul_wide(gf2_128_elt_t x, gf2_128_elt_t y,
+                                    gf2_128_elt_t t[3]) {
+  gf2_128_elt_t swx = vextq_p64(x, x, 1);
+  t[0] = vmull_low(x, y);
+  t[1] = vaddq_p64(vmull_high(swx, y), vmull_low(swx, y));
+  t[2] = vmull_high(x, y);
 }
 }  // namespace proofs
 
@@ -245,6 +263,15 @@ static inline gf2_128_elt_t gf2_128_mul(gf2_128_elt_t x, gf2_128_elt_t y) {
   return t0;
 }
 
+// The product T[0] + x^64 T[1] + x^128 T[2], unreduced (not upstream).
+static inline void gf2_128_mul_wide(gf2_128_elt_t x, gf2_128_elt_t y,
+                                    gf2_128_elt_t t[3]) {
+  gf2_128_elt_t swx = vextq_p64_1_emul(x, x);
+  t[0] = vmull_low(x, y);
+  t[1] = vaddq_p64(vmull_high(swx, y), vmull_low(swx, y));
+  t[2] = vmull_high(x, y);
+}
+
 }  // namespace proofs
 #else
 
@@ -324,6 +351,23 @@ static inline gf2_128_elt_t gf2_128_mul(gf2_128_elt_t x, gf2_128_elt_t y) {
   return t0;
 }
 
+// The product T[0] + x^64 T[1] + x^128 T[2], unreduced (not upstream).
+static inline void gf2_128_mul_wide(gf2_128_elt_t x, gf2_128_elt_t y,
+                                    gf2_128_elt_t t[3]) {
+  t[0] = clmul64(x.l[0], y.l[0]);
+  t[2] = clmul64(x.l[1], y.l[1]);
+  t[1] = clmul64(x.l[0] ^ x.l[1], y.l[0] ^ y.l[1]);
+  t[1] = gf2_128_add(t[1], gf2_128_add(t[0], t[2]));
+}
+
 #endif
+
+namespace proofs {
+// T[0] + x^64 T[1] + x^128 T[2] (gf2_128_mul_wide) reduced as gf2_128_mul
+// does (not upstream).
+static inline gf2_128_elt_t gf2_128_reduce_wide(const gf2_128_elt_t t[3]) {
+  return gf2_128_reduce(t[0], gf2_128_reduce(t[1], t[2]));
+}
+}  // namespace proofs
 
 #endif  // PRIVACY_PROOFS_ZK_LIB_GF2K_SYSDEP_H_

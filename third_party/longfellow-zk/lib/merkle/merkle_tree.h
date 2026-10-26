@@ -186,6 +186,11 @@ class MerkleTreeVerifier {
           }
         }
       }
+      // Not upstream: the proof must not hold unused digests, so that it
+      // has one encoding.
+      if (sz != proof_len) {
+        return false;
+      }
     }
 
     // set LAYERS at all leaves in POS

@@ -22,41 +22,10 @@ pub fn build_dir() -> PathBuf {
         )
 }
 
-/// A Longfellow source tree and its CMake build.
-#[derive(Clone, Copy, Debug)]
-pub enum Tree {
-    /// `third_party/longfellow-zk`, built in `LONGFELLOW_BUILD_DIR`.
-    Main,
-    /// `third_party/longfellow-zk-slh`, the copy with the SLH-DSA proofs,
-    /// built in `LONGFELLOW_SLH_BUILD_DIR`.
-    Slh,
-}
-
-impl Tree {
-    pub fn source(self) -> PathBuf {
-        match self {
-            Tree::Main => longfellow(),
-            Tree::Slh => paths::root().join("third_party").join("longfellow-zk-slh"),
-        }
-    }
-
-    pub fn build_dir(self) -> PathBuf {
-        match self {
-            Tree::Main => build_dir(),
-            Tree::Slh => std::env::var_os("LONGFELLOW_SLH_BUILD_DIR")
-                .filter(|v| !v.is_empty())
-                .map_or_else(
-                    || paths::work(STACK).join("longfellow-slh-build"),
-                    PathBuf::from,
-                ),
-        }
-    }
-}
-
-/// Where the CMake release build of TREE puts a benchmark binary, given its
-/// path relative to the build tree.
-pub fn default_bin_path(tree: Tree, test_name: &str) -> PathBuf {
-    tree.build_dir().join(test_name)
+/// Where the CMake release build puts a benchmark binary, given its path
+/// relative to the build tree.
+pub fn default_bin_path(test_name: &str) -> PathBuf {
+    build_dir().join(test_name)
 }
 
 /// The proof-size measurement programs and their build scripts.

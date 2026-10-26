@@ -19,8 +19,19 @@
 
 // slicing parameters for sha/shake3
 namespace proofs {
+//
+// Not upstream: the period is PROOFS_SHA3_SLICE_PERIOD, 6 (upstream) by
+// default. The SLH-DSA and credential proofs (circuits/tests/pq/slh_dsa,
+// circuits/tests/pq/credential) build with 24, so the only slice is the
+// final round: they commit to one block witness per Keccak-f call, and this
+// halves their witness and their Ligero tableau for 5% more circuit terms.
+// For one ML-DSA-65 verification, 24 gives 146 instead of 38 layers and a
+// 44% larger proof.
+#ifndef PROOFS_SHA3_SLICE_PERIOD
+#define PROOFS_SHA3_SLICE_PERIOD 6
+#endif
 static inline bool sha3_slice_at(size_t round) {
-  constexpr size_t period = 6;
+  constexpr size_t period = PROOFS_SHA3_SLICE_PERIOD;
   // We always slice at the final round 23.  In
   // addition, we may slice at other rounds as well.
   return (round == 23) || ((round % period) == (period - 1));

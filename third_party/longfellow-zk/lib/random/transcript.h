@@ -140,6 +140,25 @@ class Transcript : public RandomEngine {
     write_untyped(e, F);
   }
 
+  // write(GET(i), F) for i < N, with one hash update per 4 KB instead of
+  // two per element (not upstream): the same transcript.
+  template <class Field, class Get>
+  void write_each(size_t n, const Get& get, const Field& F) {
+    constexpr size_t kElt = 1 + Field::kBytes;
+    uint8_t buf[(4096 / kElt) * kElt];
+    size_t len = 0;
+    for (size_t i = 0; i < n; ++i) {
+      buf[len] = TAG_FIELD_ELEM;
+      F.to_bytes_field(&buf[len + 1], get(i));
+      len += kElt;
+      if (len == sizeof(buf)) {
+        write_untyped(buf, len);
+        len = 0;
+      }
+    }
+    if (len > 0) write_untyped(buf, len);
+  }
+
   // array of field elements
   template <class Field>
   void write(const typename Field::Elt e[/*n*/], size_t ince, size_t n,

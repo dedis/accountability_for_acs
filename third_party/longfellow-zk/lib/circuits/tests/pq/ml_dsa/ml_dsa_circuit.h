@@ -786,7 +786,11 @@ class MLDSAVerify {
       for (size_t k = 0; k < ml_dsa::N; ++k) {
         diff.coeffs[k] = lc_.sub(Az[i].coeffs[k], ct1[i].coeffs[k]);
       }
-      assert_inverse_ntt(diff, w.w_prime_approx_[i]);
+      // NTT(w'_approx) = diff, the same relation as InverseNTT(diff) =
+      // w'_approx (not upstream): the forward NTT is built with axpy and
+      // stays layered, while the inverse NTT's additions merge into one
+      // dense layer (256 (L + 1) terms per output).
+      assert_ntt(w.w_prime_approx_[i], diff);
     }
   }
 

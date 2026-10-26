@@ -180,7 +180,7 @@ typename MLDSAVerify<EvalLogic, Field, Params>::Witness convert_witness(
   for (size_t i = 0; i < Params::K; ++i) {
     for (size_t k = 0; k < ml_dsa::N; ++k) {
       int32_t w1_val = witness_gen.w_prime_1_[i][k];
-      EXPECT_TRUE(w1_val >= 0 && w1_val <= (Params::M - 1));
+      EXPECT_TRUE(w1_val >= 0 && w1_val < static_cast<int32_t>(Params::M));
     }
     convert_rqw<Params>(witness.w_prime_1_[i], witness_gen.w_prime_1_[i], L);
     convert_array_bits<Params::r1_bits>(witness.w_prime_1_bits_[i],
@@ -338,12 +338,6 @@ TYPED_TEST(MlDsaEvalTest, UseHintSingle) {
     int32_t expected = test_case.expected;
 
     auto [r1, r0] = ml_dsa::Decompose<Params>(r);
-
-    int32_t w1_raw = r1;
-    if (h && r0 > 0)
-      w1_raw = r1 + 1;
-    else if (h && r0 <= 0)
-      w1_raw = r1 - 1;
 
     int64_t gamma2 = static_cast<int64_t>(Params::gamma_2);
     int64_t delta =

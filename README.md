@@ -22,9 +22,8 @@ migrating the construction to **post-quantum cryptography**.
 │   ├── revocation/             anonymity revocation: direct, link, and MP-SPDZ decrypt
 │   ├── zk-friendly/            proof generation/verification: Circom / Groth16
 │   └── standard/               proof generation/verification: Longfellow (P-256 + SHA-256)
-├── third_party/longfellow-zk/  vendored Longfellow (Apache 2.0, Google LLC)
-├── third_party/longfellow-zk-slh/  experimental copy of Longfellow with SLH-DSA proofs
-│                               (lib/circuits/tests/pq/slh_dsa/README.md)
+├── third_party/longfellow-zk/  vendored Longfellow (Apache 2.0, Google LLC), with experimental
+│                               ML-DSA, SLH-DSA and credential proofs (lib/circuits/tests/pq/)
 ├── tools/                      benchmark.py, plot*.py, fetch.py
 ├── results/<stack>/<env>/      committed results; plots in results/<stack>/plots/
 └── .work/                      gitignored: downloads, generated circuits, builds, per-iteration files, logs
@@ -66,14 +65,15 @@ python3 tools/build.py --algorithm=slh-dsa-f --nist-level=5   # extra cargo args
 `slh-dsa`, `slh-dsa-f` and `level-5` of `revocation` and `standard`; `cargo
 build --release` alone gives ML-DSA-65. `tools/benchmark.py` takes the same options.
 
-The SLH-DSA proofs come from `third_party/longfellow-zk-slh`, an experimental
-copy of Longfellow. Every proof has the soundness of its NIST category: 192
-bits at level 3 and 256 bits at level 5. Measured on one Mac:
+The ML-DSA and SLH-DSA proofs are experimental code in
+`third_party/longfellow-zk/lib/circuits/tests/pq`. Every proof has the
+soundness of its NIST category: 192 bits at level 3 and 256 bits at level 5.
+Measured on one Mac:
 
 | Scheme             | Category | Field, queries, digest   | Soundness  | Signature | Sign     | Prove   | Verify | Proof    | Peak memory |
 |--------------------|----------|--------------------------|------------|-----------|----------|---------|--------|----------|-------------|
-| ML-DSA-65          | 3        | Fq^12, 274, 48 B         | 192.0 bits | 3,309 B   | 0.28 ms  | 6.19 s  | 3.05 s | 739 KB   | 2.3 GB      |
-| ML-DSA-87          | 5        | Fq^12, 362, 64 B         | 256.5 bits | 4,627 B   | 0.30 ms  | 7.97 s  | 4.04 s | 944 KB   | 2.9 GB      |
+| ML-DSA-65          | 3        | Fq^12, 274, 48 B         | 192.0 bits | 3,309 B   | 0.28 ms  | 2.06 s  | 0.71 s | 740 KB   | 2.0 GB      |
+| ML-DSA-87          | 5        | Fq^12, 362, 64 B         | 256.5 bits | 4,627 B   | 0.30 ms  | 2.62 s  | 0.91 s | 944 KB   | 2.3 GB      |
 | SLH-DSA-SHAKE-192s | 3        | GF(2^256), 281, 48 B     | 192.1 bits | 16,224 B  | 1,253 ms | 32.4 s  | 3.42 s | 3.07 MB  | 2.1 GB      |
 | SLH-DSA-SHAKE-192f | 3        | GF(2^256), 281, 48 B     | 192.1 bits | 35,664 B  | 56 ms    | 97.9 s  | 10.5 s | 7.40 MB  | 5.7 GB      |
 | SLH-DSA-SHAKE-256s | 5        | GF(2^384), 374, 64 B     | 256.4 bits | 29,792 B  | 1,092 ms | 83.2 s  | 8.27 s | 5.87 MB  | 4.5 GB      |

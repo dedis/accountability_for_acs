@@ -28,12 +28,13 @@ proofs_add_test(ml_dsa_ref_test)
 target_link_libraries(ml_dsa_ref_test ml_dsa sha3)
 
 
-# ML-DSA-65 and ML-DSA-87 Combined prove/verify benchmarks (not upstream). They
-# run only in the pq build, so their proof system uses SHAKE256
-# (util/crypto.h). ML-DSA-87 (category 5) uses 64-byte digests.
+# ML-DSA-44, ML-DSA-65 and ML-DSA-87 Combined prove/verify benchmarks (not
+# upstream). They run only in the pq build, so their proof system uses
+# SHAKE256 (util/crypto.h). ML-DSA-87 (category 5) uses 64-byte digests.
+proofs_add_test(ml_dsa_44_zk_test)
 proofs_add_test(ml_dsa_65_zk_test)
 proofs_add_test_digest64(ml_dsa_87_zk_test ml_dsa_87_zk_test.cc)
-foreach(PROG ml_dsa_65_zk_test ml_dsa_87_zk_test)
+foreach(PROG ml_dsa_44_zk_test ml_dsa_65_zk_test ml_dsa_87_zk_test)
   target_link_libraries(${PROG} ml_dsa sha3)
   target_compile_definitions(${PROG} PRIVATE PROOFS_SHAKE256)
 endforeach()

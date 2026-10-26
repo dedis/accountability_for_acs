@@ -186,12 +186,20 @@ class FFT {
                    const Field& F) {
     if (n > 1) {
       Elt omega_n = Twiddle<Field>::reroot(omega_j, j, n, F);
-      size_t b = std::min(n, kBasecase);
-      Elt omega_b = Twiddle<Field>::reroot(omega_n, n, b, F);
-
-      Twiddle<Field> roots(b, omega_b, F);
-      recur(A, n, omega_n, roots, F);
+      recur(A, n, omega_n, roots(n, omega_n, F), F);
     }
+  }
+
+  // The twiddles of fftb() of size N with the N-th root of unity OMEGA_N,
+  // and fftb() with them, for repeated transforms (not upstream).
+  static Twiddle<Field> roots(size_t n, const Elt& omega_n, const Field& F) {
+    size_t b = std::min(n, kBasecase);
+    Elt omega_b = Twiddle<Field>::reroot(omega_n, n, b, F);
+    return Twiddle<Field>(b, omega_b, F);
+  }
+  static void fftb(Elt A[/*n*/], size_t n, const Elt& omega_n,
+                   const Twiddle<Field>& roots, const Field& F) {
+    if (n > 1) recur(A, n, omega_n, roots, F);
   }
 
   // forward transform
