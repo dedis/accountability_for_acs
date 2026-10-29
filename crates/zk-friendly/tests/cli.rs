@@ -1,9 +1,37 @@
 #![cfg(unix)]
 
+#[cfg(not(feature = "pq"))]
 use std::fs;
+#[cfg(not(feature = "pq"))]
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+/// The post-quantum build: every benchmark stops before any tool runs.
+#[cfg(feature = "pq")]
+#[test]
+fn benchmarks_need_the_classical_build() {
+    for binary in [
+        env!("CARGO_BIN_EXE_zkfriendly_prove_verify"),
+        env!("CARGO_BIN_EXE_zkfriendly_prove_verify_no_cft"),
+        env!("CARGO_BIN_EXE_zkfriendly_prove_verify_revocation"),
+        env!("CARGO_BIN_EXE_zkfriendly_merkle_vs_flat"),
+        env!("CARGO_BIN_EXE_zkfriendly_communication_size"),
+    ] {
+        let output = Command::new(binary)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cargo build-classical"),
+            "{binary}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[cfg(not(feature = "pq"))]
 #[test]
 fn legacy_environment_options() -> anyhow::Result<()> {
     let root = std::env::temp_dir().join(format!("zk-friendly-cli-{}", std::process::id()));

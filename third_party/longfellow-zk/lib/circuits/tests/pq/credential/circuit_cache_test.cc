@@ -113,6 +113,15 @@ void RoundTrip(const Field& f) {
   EXPECT_DEATH(cached_circuit(f, "sponge_nc3", [&] { return make(3); }),
                "corrupt cached circuit");
 
+  // The new directory has mode 0700; one that others can write is refused,
+  // since anyone could plant a circuit there.
+  EXPECT_EQ(std::filesystem::status(dir).permissions(),
+            std::filesystem::perms::owner_all);
+  std::filesystem::permissions(dir, std::filesystem::perms::others_write,
+                               std::filesystem::perm_options::add);
+  EXPECT_DEATH(cached_circuit(f, "sponge_nc2", [&] { return make(2); }),
+               "must belong to the user");
+
   ASSERT_EQ(unsetenv("PQ_CIRCUIT_CACHE"), 0);
   cached_circuit(f, "sponge_nc3", [&] { return make(3); });
   EXPECT_EQ(compiled, 3u);

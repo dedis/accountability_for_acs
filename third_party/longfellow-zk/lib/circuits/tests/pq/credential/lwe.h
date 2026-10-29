@@ -1,14 +1,17 @@
-// Module-LWE encryption of the CFT identity (PQ_MIGRATION.md, Q1) and its
+// Module-LWE encryption of the CFT identity and its
 // circuit over an extension of Fq, q = 8380417 (not upstream).
 //
 // !!!!! DO NOT USE IN PRODUCTION !!!!!  Experimental research code.
 //
-// PROVISIONAL PARAMETERS, not checked with the lattice estimator. They
-// mirror the Module-LWE instance of ML-DSA at the same q: rank K = 5 and
-// secrets and errors uniform in [-ETA, ETA] with ETA = 4 for category 3
-// (ML-DSA-65: l = 5, eta = 4), K = 7 and ETA = 2 for category 5 (ML-DSA-87:
-// l = 7, eta = 2). The ciphertext gives K + 3 samples of the secret R
-// (ML-DSA: k = 6 or 8).
+// The parameters mirror the Module-LWE instance of ML-DSA at the same q:
+// rank K = 5 and secrets and errors uniform in [-ETA, ETA] with ETA = 4 for
+// category 3 (ML-DSA-65: l = 5, eta = 4), K = 7 and ETA = 2 for category 5
+// (ML-DSA-87: l = 7, eta = 2). The ciphertext gives K + 3 samples of the
+// secret R (ML-DSA: k = 6 or 8). tools/lwe_estimate.py (repository root)
+// checks them with the lattice estimator.
+//
+// Not constant-time: this is the reference of the tests and benchmarks.
+// crates/pqc/src/lwe.rs is the constant-time implementation.
 //
 // Ring R_q = Z_q[X] / (X^256 + 1). Public matrix A (K x K, NTT domain,
 // RejNTTPoly of a public seed, as ML-DSA's ExpandA). Key: three slots
@@ -98,14 +101,20 @@ class Lwe {
   static constexpr uint32_t Q = ml_dsa::Q;
 
  public:
-  // A uniform in [-eta, eta], as an integer in [0, q).
+  // A uniform in [-eta, eta], as an integer in [0, q). At most 4 of 256
+  // bytes are rejected: 32 rejections in a row occur with probability below
+  // 2^-192.
   static uint32_t small(RandomEngine& rng) {
-    uint8_t x;
-    do {
+    for (int draw = 0; draw < 32; ++draw) {
+      uint8_t x;
       rng.bytes(&x, 1);
-    } while (x >= 256 - 256 % (2 * LP::eta + 1));
-    const uint32_t v = x % (2 * LP::eta + 1);
-    return v <= LP::eta ? v : Q - (2 * LP::eta + 1 - v);
+      if (x < 256 - 256 % (2 * LP::eta + 1)) {
+        const uint32_t v = x % (2 * LP::eta + 1);
+        return v <= LP::eta ? v : Q - (2 * LP::eta + 1 - v);
+      }
+    }
+    check(false, "the random engine gave 32 rejected bytes in a row");
+    return 0;
   }
 
   static Poly small_poly(RandomEngine& rng) {
@@ -114,9 +123,23 @@ class Lwe {
     return p;
   }
 
-  // The public matrix from SEED (32 bytes), and a key: T_j = A S_j + E_j.
+  // The public matrix from SEED (32 bytes), and a random key.
   static void keygen(const std::array<uint8_t, 32>& seed, RandomEngine& rng,
                      LwePublic<LP>& pub, LweSecret<LP>& sec) {
+    std::array<std::array<Poly, LP::K>, kLweSlots> e;
+    for (size_t j = 0; j < kLweSlots; ++j) {
+      for (Poly& s : sec.s[j]) s = small_poly(rng);
+      for (Poly& p : e[j]) p = small_poly(rng);
+    }
+    keygen(seed, sec, e, pub);
+  }
+
+  // The public matrix from SEED and the key of the secret SEC and the error
+  // E: T_j = A S_j + E_j.
+  static void keygen(const std::array<uint8_t, 32>& seed,
+                     const LweSecret<LP>& sec,
+                     const std::array<std::array<Poly, LP::K>, kLweSlots>& e,
+                     LwePublic<LP>& pub) {
     for (uint8_t i = 0; i < LP::K; ++i) {
       for (uint8_t j = 0; j < LP::K; ++j) {
         std::vector<uint8_t> in(seed.begin(), seed.end());
@@ -128,7 +151,6 @@ class Lwe {
     for (size_t j = 0; j < kLweSlots; ++j) {
       std::array<ml_dsa::Rq, LP::K> s_hat;
       for (size_t c = 0; c < LP::K; ++c) {
-        sec.s[j][c] = small_poly(rng);
         s_hat[c] = to_rq(sec.s[j][c]);
         ml_dsa::Ntt(s_hat[c]);
       }
@@ -137,20 +159,31 @@ class Lwe {
         for (size_t c = 0; c < LP::K; ++c) {
           acc = ml_dsa::addf(acc, ml_dsa::mulf(pub.a_hat[i][c], s_hat[c]));
         }
-        ml_dsa::Rq e = to_rq(small_poly(rng));
-        ml_dsa::Ntt(e);
-        pub.t_hat[j][i] = ml_dsa::addf(acc, e);
+        ml_dsa::Rq e_hat = to_rq(e[j][i]);
+        ml_dsa::Ntt(e_hat);
+        pub.t_hat[j][i] = ml_dsa::addf(acc, e_hat);
       }
     }
   }
 
+  // Encrypts M with random RND.
   static LweCiphertext<LP> encrypt(const LwePublic<LP>& pub,
                                    const std::array<uint8_t, kLweMsgBytes>& m,
                                    RandomEngine& rng, LweRandomness<LP>& rnd) {
-    std::array<ml_dsa::Rq, LP::K> r_hat;
     for (size_t c = 0; c < LP::K; ++c) {
       rnd.r[c] = small_poly(rng);
       rnd.e1[c] = small_poly(rng);
+    }
+    for (Poly& p : rnd.e2) p = small_poly(rng);
+    return encrypt(pub, m, rnd);
+  }
+
+  // Encrypts M with the randomness RND.
+  static LweCiphertext<LP> encrypt(const LwePublic<LP>& pub,
+                                   const std::array<uint8_t, kLweMsgBytes>& m,
+                                   const LweRandomness<LP>& rnd) {
+    std::array<ml_dsa::Rq, LP::K> r_hat;
+    for (size_t c = 0; c < LP::K; ++c) {
       r_hat[c] = to_rq(rnd.r[c]);
       ml_dsa::Ntt(r_hat[c]);
     }
@@ -164,7 +197,6 @@ class Lwe {
       ct.u[i] = to_poly(ml_dsa::addf(acc, to_rq(rnd.e1[i])));
     }
     for (size_t j = 0; j < kLweSlots; ++j) {
-      rnd.e2[j] = small_poly(rng);
       ml_dsa::Rq acc = to_rq(Poly{});
       for (size_t c = 0; c < LP::K; ++c) {
         acc = ml_dsa::addf(acc, ml_dsa::mulf(pub.t_hat[j][c], r_hat[c]));
@@ -209,6 +241,23 @@ class Lwe {
     return (m[i / 8] >> (i % 8)) & 1;
   }
 };
+
+// Every coefficient of CT is below q. A verifier rejects other ciphertexts
+// before it reads them as field elements (of_scalar aborts on them).
+template <class LP>
+bool in_range(const LweCiphertext<LP>& ct) {
+  for (const Poly& p : ct.u) {
+    for (uint32_t x : p) {
+      if (x >= ml_dsa::Q) return false;
+    }
+  }
+  for (const Poly& p : ct.v) {
+    for (uint32_t x : p) {
+      if (x >= ml_dsa::Q) return false;
+    }
+  }
+  return true;
+}
 
 // Number transform of P (FIPS 204, Algorithm 41), on circuit values.
 template <class LogicCircuit>

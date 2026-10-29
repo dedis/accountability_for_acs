@@ -15,22 +15,23 @@
 //! Fq^12, 64-byte digests).
 //!
 //! The summary also has the native signing time (`statsMs.sign`) of the same
-//! scheme, with the signer of `revocation` (fips204 / fips205).
+//! scheme, with the signer of `pqc` (fips204 / fips205).
 
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use revocation::pq_sig::{PqSig, Selected};
+use pqc::sig::{PqSig, Selected};
 use standard::cli::Common;
 use standard::driver::{self, Bench};
 
-/// Native signing with the system's signer (`revocation::pq_sig::Selected`,
-/// the scheme the proof is for): one key, a 32-byte message (the size of a C4
-/// message), one untimed warm-up, then `reps` timed signatures (ms).
+/// Native signing with the system's signer (`pqc::sig::Selected`,
+/// the scheme the proof is for): one key, a message of the size of a C4
+/// message (`SHAKE256(t || r2)`, [`pqc::shake::DIGEST_BYTES`] bytes), one
+/// untimed warm-up, then `reps` timed signatures (ms).
 fn sign_ms(reps: usize) -> Result<Vec<f64>> {
     let (_, sk) = Selected::keygen()?;
-    let msg = [0x5a; 32];
+    let msg = [0x5a; pqc::shake::DIGEST_BYTES];
     Selected::sign(&sk, &msg)?;
     (0..reps)
         .map(|_| {

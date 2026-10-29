@@ -1,5 +1,5 @@
-//! Post-quantum signatures for C4 (`pq` feature): ML-DSA (FIPS 204) and
-//! SLH-DSA (FIPS 205), and the scheme chosen at compile time.
+//! ML-DSA (FIPS 204) and SLH-DSA (FIPS 205), and the scheme chosen at
+//! compile time: the C4 and issuer signatures of the post-quantum stacks.
 //!
 //! The `slh-dsa` feature selects SLH-DSA in place of ML-DSA, the `level-5`
 //! feature NIST security category 5 in place of 3, and the `slh-dsa-f`
@@ -19,25 +19,17 @@
 //! variants sign in about 0.1 s, but their proofs need about twice as many
 //! Keccak-f calls.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Mutex;
 
-use anyhow::{bail, Result};
-use ark_ec::CurveGroup;
-use ark_ff::{BigInteger, PrimeField};
-use rand::Rng;
-
-use babyjub::curve::{base8, rand_scalar, Fq, Point, PointAffine};
-use babyjub::poseidon::Poseidon;
+use anyhow::Result;
 use fips204::{ml_dsa_65, ml_dsa_87};
 use fips205::{slh_dsa_shake_192f, slh_dsa_shake_192s, slh_dsa_shake_256f, slh_dsa_shake_256s};
 
-use crate::c4::Scheme;
-
-/// Context string of every C4 signature (FIPS 204/205 `ctx`).
-pub const CONTEXT: &[u8] = b"PQ-CFT-C4-v1";
+/// Context string of every signature (FIPS 204/205 `ctx`): empty, as the
+/// witnesses of the credential proof (OpenSSL's default,
+/// `third_party/longfellow-zk/lib/circuits/tests/pq/credential/ossl_sig.h`),
+/// so that a C4 signed here verifies in the proof and the reverse.
+pub const CONTEXT: &[u8] = b"";
 
 /// One post-quantum signature parameter set. Signing is hedged with OS
 /// randomness.
@@ -49,13 +41,15 @@ pub trait PqSig {
     /// Signature size in bytes.
     const SIG_LEN: usize;
 
-    type PublicKey: Send;
+    type PublicKey: Clone + Send + Sync;
     type SigningKey: Send + Sync;
     type Signature: AsRef<[u8]> + Send;
 
     fn keygen() -> Result<(Self::PublicKey, Self::SigningKey)>;
     fn sign(sk: &Self::SigningKey, msg: &[u8]) -> Result<Self::Signature>;
     fn verify(pk: &Self::PublicKey, msg: &[u8], sig: &Self::Signature) -> bool;
+    /// The encoded public key (FIPS 204 `pkEncode`, FIPS 205 `PK.seed || PK.root`).
+    fn public_key_bytes(pk: &Self::PublicKey) -> Vec<u8>;
 }
 
 /// ML-DSA parameter set `K`.
@@ -86,6 +80,10 @@ macro_rules! pq_sig {
 
             fn verify(pk: &Self::PublicKey, msg: &[u8], sig: &Self::Signature) -> bool {
                 $krate::traits::Verifier::verify(pk, msg, sig, CONTEXT)
+            }
+
+            fn public_key_bytes(pk: &Self::PublicKey) -> Vec<u8> {
+                $krate::traits::SerDes::into_bytes(pk.clone()).to_vec()
             }
         }
     };
@@ -156,60 +154,6 @@ pub type Selected = SlhDsa192f;
 #[cfg(all(feature = "slh-dsa-f", feature = "level-5"))]
 pub type Selected = SlhDsa256f;
 
-/// C4 with a post-quantum signature. The identity is a random Baby Jubjub
-/// point, and `registry` maps it to the user's public key. Keygen runs on
-/// several threads, so the registry is behind a mutex.
-pub struct PqC4<P: PqSig> {
-    registry: Mutex<HashMap<PointAffine, P::PublicKey>>,
-}
-
-impl<P: PqSig> Default for PqC4<P> {
-    fn default() -> Self {
-        Self {
-            registry: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-impl<P: PqSig> Scheme for PqC4<P> {
-    type SigningKey = P::SigningKey;
-    type Signature = P::Signature;
-
-    fn keygen<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<(Point, P::SigningKey)> {
-        let (pk, sk) = P::keygen()?;
-        let id_u = base8() * rand_scalar(rng);
-        match self
-            .registry
-            .lock()
-            .expect("registry lock")
-            .entry(id_u.into_affine())
-        {
-            Entry::Occupied(_) => bail!("identity already registered"),
-            Entry::Vacant(slot) => slot.insert(pk),
-        };
-        Ok((id_u, sk))
-    }
-
-    /// Signs the 32-byte big-endian encoding of `msg`.
-    fn sign<R: Rng + ?Sized>(
-        &self,
-        _: &Poseidon,
-        key: &P::SigningKey,
-        msg: Fq,
-        _: &mut R,
-    ) -> Result<P::Signature> {
-        P::sign(key, &msg.into_bigint().to_bytes_be())
-    }
-
-    fn verify(&self, _: &Poseidon, id_u: PointAffine, msg: Fq, sig: &P::Signature) -> bool {
-        self.registry
-            .lock()
-            .expect("registry lock")
-            .get(&id_u)
-            .is_some_and(|pk| P::verify(pk, &msg.into_bigint().to_bytes_be(), sig))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +164,9 @@ mod tests {
         assert_eq!(sig.as_ref().len(), P::SIG_LEN);
         assert!(P::verify(&pk, b"message", &sig));
         assert!(!P::verify(&pk, b"messagf", &sig));
+        let (other, _) = P::keygen().unwrap();
+        assert!(!P::verify(&other, b"message", &sig));
+        assert_ne!(P::public_key_bytes(&pk), P::public_key_bytes(&other));
     }
 
     #[test]
@@ -233,19 +180,16 @@ mod tests {
         roundtrip::<MlDsa87>();
     }
 
+    /// FIPS 204 Table 2: public key sizes.
     #[test]
-    fn duplicate_identity_keeps_the_registered_key() {
-        use rand::rngs::StdRng;
-        use rand::SeedableRng;
-
-        let scheme = PqC4::<MlDsa65>::default();
-        let poseidon = Poseidon::new();
-        let msg = Fq::from(7u64);
-        let (id, sk) = scheme.keygen(&mut StdRng::seed_from_u64(1)).unwrap();
-        let sig = scheme
-            .sign(&poseidon, &sk, msg, &mut rand::thread_rng())
-            .unwrap();
-        assert!(scheme.keygen(&mut StdRng::seed_from_u64(1)).is_err());
-        assert!(scheme.verify(&poseidon, id.into_affine(), msg, &sig));
+    fn ml_dsa_public_keys_have_the_fips_size() {
+        assert_eq!(
+            MlDsa65::public_key_bytes(&MlDsa65::keygen().unwrap().0).len(),
+            1952
+        );
+        assert_eq!(
+            MlDsa87::public_key_bytes(&MlDsa87::keygen().unwrap().0).len(),
+            2592
+        );
     }
 }

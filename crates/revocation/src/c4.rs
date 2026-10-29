@@ -1,9 +1,7 @@
-//! The C4 tag binding: `C4 = Sign_{IDu}(H(t, D2))`, with `H` Poseidon, or
-//! SHAKE256 with the `pq` feature ([`crate::hash`]), and the signature scheme
-//! given by a [`Scheme`].
-//!
-//! Without `pq`, [`EdDsa`] matches the zk-friendly `prove_verify.circom` wire
-//! format.
+//! The classical C4 tag binding: `C4 = Sign_{IDu}(H(t, D2))`, with `H`
+//! Poseidon ([`crate::hash`]) and the signature scheme given by a [`Scheme`].
+//! [`EdDsa`] matches the zk-friendly `prove_verify.circom` wire format. The
+//! post-quantum C4 is in [`crate::lwe_cft`].
 
 use anyhow::Result;
 use rand::Rng;
@@ -47,23 +45,11 @@ pub trait Scheme: Sync {
 #[derive(Default)]
 pub struct EdDsa;
 
-/// The C4 scheme of the benchmarks: EdDSA-Poseidon without the `pq` feature,
-/// the post-quantum signature chosen at compile time with it
-/// ([`crate::pq_sig::Selected`]).
-#[cfg(not(feature = "pq"))]
+/// The classical C4 scheme of the benchmarks.
 pub type Selected = EdDsa;
-/// The C4 scheme of the benchmarks: EdDSA-Poseidon without the `pq` feature,
-/// the post-quantum signature chosen at compile time with it
-/// ([`crate::pq_sig::Selected`]).
-#[cfg(feature = "pq")]
-pub type Selected = crate::pq_sig::PqC4<crate::pq_sig::Selected>;
 
 /// Name of [`Selected`].
-#[cfg(not(feature = "pq"))]
 pub const SELECTED_NAME: &str = "EdDSA-Poseidon";
-/// Name of [`Selected`].
-#[cfg(feature = "pq")]
-pub const SELECTED_NAME: &str = <crate::pq_sig::Selected as crate::pq_sig::PqSig>::NAME;
 
 impl Scheme for EdDsa {
     type SigningKey = SecretKey;
@@ -150,11 +136,5 @@ mod tests {
     #[test]
     fn eddsa_rejects_a_changed_tag() {
         changed_tag_is_rejected(&EdDsa);
-    }
-
-    #[cfg(feature = "pq")]
-    #[test]
-    fn post_quantum_rejects_a_changed_tag() {
-        changed_tag_is_rejected(&Selected::default());
     }
 }

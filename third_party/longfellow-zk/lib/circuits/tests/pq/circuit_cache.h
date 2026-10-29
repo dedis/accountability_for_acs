@@ -8,6 +8,10 @@
 // what make() depends on that the executable does not fix: the number of
 // copies and the values compiled into the circuit (object_tag()). Without
 // the variable, cached_circuit() returns make().
+//
+// A cached circuit is trusted: a planted circuit without constraints would
+// make Verify accept false statements. So the directory must belong to the
+// user and must not be writable by others; it is created with mode 0700.
 
 #ifndef PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_CIRCUIT_CACHE_H_
 #define PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_CIRCUIT_CACHE_H_
@@ -113,6 +117,22 @@ std::unique_ptr<Circuit<Field>> cached_circuit(const Field& f,
                                                const Make& make) {
   const char* dir = std::getenv("PQ_CIRCUIT_CACHE");
   if (dir == nullptr || *dir == '\0') return make();
+  {
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec)) {
+      std::filesystem::create_directories(dir, ec);
+      check(!ec, "cannot create PQ_CIRCUIT_CACHE");
+      std::filesystem::permissions(dir, std::filesystem::perms::owner_all,
+                                   std::filesystem::perm_options::replace, ec);
+      check(!ec, "cannot set the mode of PQ_CIRCUIT_CACHE");
+    }
+    struct stat st;
+    check(stat(dir, &st) == 0 && S_ISDIR(st.st_mode),
+          "PQ_CIRCUIT_CACHE is not a directory");
+    check(st.st_uid == geteuid() && (st.st_mode & (S_IWGRP | S_IWOTH)) == 0,
+          "PQ_CIRCUIT_CACHE must belong to the user and not be writable by "
+          "others");
+  }
   constexpr FieldID kId = circuit_field_id<Field>();
   const std::filesystem::path path =
       std::filesystem::path(dir) /
@@ -140,8 +160,6 @@ std::unique_ptr<Circuit<Field>> cached_circuit(const Field& f,
   auto c = make();
   std::vector<uint8_t> bytes;
   CircuitWriter<Field>(f, kId).to_bytes(*c, bytes);
-  std::filesystem::create_directories(dir, ec);
-  check(!ec, "cannot create PQ_CIRCUIT_CACHE");
   // Written under another name, then renamed: no reader sees a part.
   const std::string tmp = path.string() + ".tmp" + std::to_string(getpid());
   {

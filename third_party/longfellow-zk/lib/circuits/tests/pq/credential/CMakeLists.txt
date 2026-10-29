@@ -18,7 +18,8 @@ proofs_add_test(pq_credential_test)
 proofs_add_test_digest64(pq_credential_5_test pq_credential_test.cc)
 foreach(PROG pq_credential_test pq_credential_5_test)
   target_link_libraries(${PROG} ml_dsa sha3 crypto)
-  target_compile_definitions(${PROG} PRIVATE PROOFS_SHAKE256)
+  target_compile_definitions(${PROG} PRIVATE PROOFS_SHAKE256
+    PQ_CRED_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
 endforeach()
 
 proofs_add_test(checkpoint_test)

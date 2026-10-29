@@ -4,15 +4,17 @@
 // !!!!! DO NOT USE IN PRODUCTION !!!!!  Experimental research code.
 //
 // The statement of ml_dsa_cred.h with SLH-DSA (FIPS 205, SHAKE sets): the
-// issuer signature on D under the public issuer key, and the signature on
-// the nonce (without CFT) or C4 on SHAKE256(T || R2) (with CFT) under a
-// private user key (PK.seed, PK.root) whose ID = SHAKE256(PK.seed ||
-// PK.root, 64 bytes) is in the credential.
+// issuer signature on D under the public issuer key, and the private
+// signature on the nonce (without CFT) or C4 on SHAKE256(T || R2) (with
+// CFT, T = event_tag(NOW, RID, VERIFIER)) under a private user key
+// (PK.seed, PK.root) whose ID = SHAKE256(PK.seed || PK.root, 64 bytes) is
+// in the credential. C4 stays private: the last authentication-path node of
+// an SLH-DSA signature takes two values per key.
 //
 // Main proof over GF(2^256) (192s, 192f) or GF(2^384) (256s, 256f):
 //
 //   0  sponge: ID, the credential, the tag, and (with CFT) the binding
-//      H = SHAKE256(ID || R2 || SALT), a public digest
+//      H = SHAKE256(ID || R2) (cft_binding), a public digest
 //   1  age: the timestamp checks
 //   2+ step: the hash steps of both verifications (slh_dsa.h), the user's
 //      key bits linked to the sponge copy that hashes them, in parts of at
@@ -22,10 +24,10 @@
 //      slh_dsa::Layout1: no capacity and no output state committed)
 //
 // With CFT, the encryption is proved over Fq^12, where q is native: a
-// second proof with the parts sponge (H again, from private ID, R2 and
-// SALT) and lwe (lwe.h). Both proofs compute the public H, so (by the
-// collision resistance of SHAKE256) they use the same ID and R2; the
-// 32-byte private SALT hides them.
+// second proof with the parts sponge (H again, from private ID and R2) and
+// lwe (lwe.h). Both proofs compute the public H, so (by the collision
+// resistance of SHAKE256) they use the same ID and R2; the fresh 32-byte
+// private R2 hides ID. After opening, H also checks the opened ID || R2.
 
 #ifndef PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_CREDENTIAL_SLH_DSA_CRED_H_
 #define PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_CREDENTIAL_SLH_DSA_CRED_H_
@@ -36,6 +38,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -95,7 +98,6 @@ class SlhDsaCredential {
   using RSQ = typename MlDsaRs<FieldQ>::Factory;
   static constexpr size_t kRate = 4;
   static constexpr size_t kQueries = kCredQueries<kCat5>;
-  static constexpr size_t kSaltBytes = 32;
   enum Part : uint32_t { kSponge, kAge, kStep0 };
   static constexpr size_t kStepChunk = 4096;
   enum PartQ : uint32_t { kSpongeQ, kLweQ };
@@ -105,10 +107,12 @@ class SlhDsaCredential {
     std::vector<uint8_t> issuer_pk;
     uint64_t now = 0, max_birth = 0;
     std::array<uint8_t, 32> nonce{};  // without CFT
-    std::array<uint8_t, 32> t{};      // with CFT
-    std::vector<uint8_t> c4;          // with CFT
-    LweCiphertext<LP> ct{};           // with CFT
-    std::vector<uint8_t> h;           // with CFT: SHAKE256(ID || R2 || SALT)
+    // With CFT: the request ID and the verifier ID of the event tag
+    // (event_tag, with NOW), the encryption of ID || R2, and its binding
+    // H = SHAKE256(ID || R2) (cft_binding).
+    std::array<uint8_t, 32> rid{}, verifier{};
+    LweCiphertext<LP> ct{};
+    HashBytes h{};
   };
 
   struct Secret {
@@ -116,17 +120,22 @@ class SlhDsaCredential {
     Timestamps ts{};
     std::vector<uint8_t> issuer_sig;
     std::vector<uint8_t> user_pk;
-    std::vector<uint8_t> user_sig;  // on the nonce (without CFT)
+    // On the nonce, or C4 on SHAKE256(t || R2). C4 is private: an SLH-DSA
+    // signature shows its public key without the message.
+    std::vector<uint8_t> user_sig;
     std::array<uint8_t, 32> r2{};
-    std::array<uint8_t, kSaltBytes> salt{};
     LweRandomness<LP> rnd{};
+    // Tests only, the witnesses of cheating provers; the verifier must
+    // reject their proofs. An LWE witness message in place of ID || R2 from
+    // the sponge; ID attribute values from the credential, not from the
+    // user key (hash_credential).
+    std::optional<std::array<uint8_t, kLweMsgBytes>> lwe_message_override;
+    bool id_values_from_credential = false;
   };
 
   explicit SlhDsaCredential(const LwePublic<LP>& lwe) : lwe_(lwe), rs_(f_) {
     Show show;
     show.issuer_pk.assign(P::pk_bytes, 0);
-    show.c4.assign(P::sig_bytes, 0);
-    show.h.assign(kHashDigestSize, 0);
     Built b(f_);
     build(show, nullptr, b);
     nstep_[0] = b.kind[0].size();
@@ -208,6 +217,7 @@ class SlhDsaCredential {
     PackedLayer<FieldQ> q1(1, lwec_->ninputs, fq_);
     std::array<uint8_t, kLweMsgBytes> m;
     for (size_t i = 0; i < kLweMsgBytes; ++i) m[i] = byte_of(bq.msg, i);
+    if (sec.lwe_message_override) m = *sec.lwe_message_override;
     fill_lwe(q1, fq_, show.ct, &m, &sec.rnd);
     const std::vector<const PackedLayer<FieldQ>*> wq{q0.get(), &q1};
     proof_q_ =
@@ -220,6 +230,9 @@ class SlhDsaCredential {
 
   // Verifies the serialized proofs of the last Prove() against SHOW.
   bool Verify(const Show& show) const {
+    if (!in_range(show.ct) || !timestamps_fit(show.now, show.max_birth)) {
+      return false;
+    }
     {
       ZkMultiProof<Field> proof(*lay_, kRate, kQueries);
       if (!roundtrip(*proof_, proof, f_)) return false;
@@ -274,16 +287,6 @@ class SlhDsaCredential {
     return r;
   }
 
-  // H = SHAKE256(ID || R2 || SALT), the public binding of the two proofs.
-  static std::vector<uint8_t> binding(const std::vector<uint8_t>& id,
-                                      const std::array<uint8_t, 32>& r2,
-                                      const std::array<uint8_t, 32>& salt) {
-    std::vector<uint8_t> in(id);
-    in.insert(in.end(), r2.begin(), r2.end());
-    in.insert(in.end(), salt.begin(), salt.end());
-    return shake256(in, kHashDigestSize);
-  }
-
  private:
   struct Built {
     explicit Built(const Field& f) : links(f), sponge(kSponge, links) {}
@@ -323,18 +326,18 @@ class SlhDsaCredential {
     const Bytes id =
         sp.shake(kShake256Rate, free_bytes(sec->user_pk.data(), P::pk_bytes),
                  kIdBytes, &pk);
-    const CredentialRefs cred = hash_credential(sp, sec->cred, id, kCft);
+    const CredentialRefs cred =
+        hash_credential(sp, sec->cred, id, kCft, sec->id_values_from_credential);
     Bytes msg;
     if (kCft) {
-      const Bytes t = const_bytes(show.t.data(), 32);
+      const auto tag = event_tag(show.now, show.rid, show.verifier);
+      const Bytes t = const_bytes(tag.data(), tag.size());
       const Bytes r2_free = free_bytes(sec->r2.data(), 32);
       Bytes in;
       msg = sp.shake(kShake256Rate, cat({&t, &r2_free}), kHashDigestSize, &in);
-      const Bytes r2 = slice(in, 32, 32);
-      const Bytes salt = free_bytes(sec->salt.data(), kSaltBytes);
-      const Bytes h = sp.shake(kShake256Rate, cat({&id, &r2, &salt}),
-                               kHashDigestSize);
-      check(show.h.size() == kHashDigestSize, "binding length");
+      const Bytes r2 = slice(in, tag.size(), 32);
+      const Bytes h =
+          sp.shake(kShake256Rate, cat({&id, &r2}), kHashDigestSize);
       for (size_t i = 0; i < h.size(); ++i) {
         b.links.fixed(h[i].r,
                       (show.h[i / 8] >> (i % 8)) & 1 ? f_.one() : f_.zero());
@@ -365,11 +368,11 @@ class SlhDsaCredential {
         slh_dsa::Val::konst(show.issuer_pk.data() + P::n, P::n), ctx,
         to_val(cred.digest), sec->issuer_sig, /*sig_public=*/false,
         /*one_block=*/true);
-    // With CFT, the user's signature is the public C4.
+    // The user's signature (C4 with CFT) is private.
     slh_dsa::Plan<P> user(to_val(slice(pk, 0, P::n)),
                           to_val(slice(pk, P::n, P::n)), ctx, to_val(msg),
-                          kCft ? show.c4 : sec->user_sig,
-                          /*sig_public=*/kCft, /*one_block=*/true);
+                          sec->user_sig, /*sig_public=*/false,
+                          /*one_block=*/true);
     b.native_ok = issuer.native_ok && user.native_ok;
     const size_t nissuer = issuer.copies.size();
     const size_t ncopies = nissuer + user.copies.size();
@@ -431,16 +434,14 @@ class SlhDsaCredential {
     }
   }
 
-  // The encryption proof: H from private ID, R2 and SALT, and the LWE
-  // message ID || R2 from the same bytes.
+  // The encryption proof: H from private ID and R2, and the LWE message
+  // ID || R2 from the same bytes.
   void build_q(const Show& show, const Secret* sec, BuiltQ& b) const {
-    std::vector<uint8_t> in(kIdBytes + 32 + kSaltBytes, 0);
+    std::vector<uint8_t> in(kIdBytes + 32, 0);
     if (sec != nullptr) {
       const auto id = shake256(sec->user_pk, kIdBytes);
       std::copy(id.begin(), id.end(), in.begin());
       std::copy(sec->r2.begin(), sec->r2.end(), in.begin() + kIdBytes);
-      std::copy(sec->salt.begin(), sec->salt.end(),
-                in.begin() + kIdBytes + 32);
     }
     Bytes refs;
     const Bytes h = b.sponge.shake(kShake256Rate, free_bytes(in.data(), in.size()),

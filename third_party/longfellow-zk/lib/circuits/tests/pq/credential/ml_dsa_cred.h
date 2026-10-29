@@ -9,9 +9,11 @@
 //   - BIRTH <= MAX_BIRTH and VALID_FROM <= NOW <= VALID_UNTIL (age.h);
 //   - without CFT: a signature on the public NONCE verifies under a private
 //     hardware key whose ID (tr) is in attributes 14 and 15;
-//   - with CFT: the public C4 signature on SHAKE256(T || R2) verifies under
+//   - with CFT: the private C4 signature on SHAKE256(T || R2) verifies under
 //     a private user key whose ID is in attributes 0 and 1, and the public
-//     (U, V) encrypts ID || R2 (lwe.h; T public, R2 private).
+//     (U, V) encrypts ID || R2 (lwe.h). T = event_tag(NOW, RID, VERIFIER)
+//     (credential.h) is public, R2 private. C4 stays private: an ML-DSA
+//     signature shows its public key without the message.
 //
 // A private key is verified with its matrix A computed in the circuit
 // (ExpandA, FIPS 204 Alg. 32) and its tr = SHAKE256(pk) hashed in the
@@ -32,6 +34,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -258,7 +261,7 @@ class KeyVerifyCircuit {
 // Proof parameters per NIST category: the field and digests of
 // MlDsaZkHarness, Ligero queries for the larger tableau (the proximity
 // term gives about 0.68 bits per query at rate 4; pq_credential_test
-// checks the bound), and the provisional LWE parameters.
+// checks the bound), and the LWE parameters.
 template <class Params>
 struct MlDsaCredParams {
   using Z = MlDsaZkDefault<Params>;
@@ -295,9 +298,12 @@ class MlDsaCredential {
     std::vector<uint8_t> issuer_pk;
     uint64_t now = 0, max_birth = 0;
     std::array<uint8_t, 32> nonce{};  // without CFT
-    std::array<uint8_t, 32> t{};      // with CFT
-    std::vector<uint8_t> c4;          // with CFT
-    LweCiphertext<LP> ct{};           // with CFT
+    // With CFT: the request ID and the verifier ID of the event tag
+    // (event_tag, with NOW), the encryption of ID || R2 and its binding
+    // H = SHAKE256(ID || R2) (cft_binding).
+    std::array<uint8_t, 32> rid{}, verifier{};
+    LweCiphertext<LP> ct{};
+    HashBytes h{};
   };
 
   // The holder's private inputs.
@@ -306,9 +312,17 @@ class MlDsaCredential {
     Timestamps ts{};
     std::vector<uint8_t> issuer_sig;
     std::vector<uint8_t> user_pk;
-    std::vector<uint8_t> user_sig;  // on the nonce, or C4
+    // On the nonce, or C4 on SHAKE256(t || R2). C4 is private: an ML-DSA
+    // signature shows its public key without the message.
+    std::vector<uint8_t> user_sig;
     std::array<uint8_t, 32> r2{};   // with CFT
     LweRandomness<LP> rnd{};        // with CFT
+    // Tests only, the witnesses of cheating provers; the verifier must
+    // reject their proofs. An LWE witness message in place of ID || R2 from
+    // the sponge; ID attribute values from the credential, not from the
+    // user key (hash_credential).
+    std::optional<std::array<uint8_t, kLweMsgBytes>> lwe_message_override;
+    bool id_values_from_credential = false;
   };
 
   explicit MlDsaCredential(const LwePublic<LP>& lwe) : lwe_(lwe) {
@@ -318,7 +332,6 @@ class MlDsaCredential {
     // The sponge copies do not depend on the inputs: count them on zeros.
     Show show;
     show.issuer_pk.assign(kPkBytes, 0);
-    show.c4.assign(sig_bytes(), 0);
     Built b(f_);
     build(show, nullptr, b);
     sponge_ = make_sponge(b.sponge.copies().size());
@@ -332,12 +345,6 @@ class MlDsaCredential {
     // take 4 bytes (PackedLayer): no checkpointing.
     lay_ = std::make_unique<ZkMultiLayout<Field>>(
         parts, std::vector<size_t>(parts.size(), 1));
-  }
-
-  static constexpr size_t sig_bytes() {
-    return Params::c_tilde_bytes +
-           Params::L * 32 * (1 + ml_dsa::bitlen(Params::gamma_1 - 1)) +
-           Params::omega + Params::K;
   }
 
   size_t sponge_copies() const { return sponge_->nc; }
@@ -365,7 +372,7 @@ class MlDsaCredential {
     fill_age(*w.back(), ts, false);
     if (kCft) {
       w.push_back(std::make_unique<PackedLayer<Field>>(1, lwec_->ninputs, f_));
-      const auto m = lwe_message(b);
+      const auto m = sec.lwe_message_override.value_or(lwe_message(b));
       fill_lwe(*w.back(), f_, show.ct, &m, &sec.rnd);
     }
     std::vector<const PackedLayer<Field>*> wp;
@@ -380,6 +387,9 @@ class MlDsaCredential {
 
   // Verifies the serialized proof of the last Prove() against SHOW.
   bool Verify(const Show& show) const {
+    if (!in_range(show.ct) || !timestamps_fit(show.now, show.max_birth)) {
+      return false;
+    }
     std::vector<uint8_t> bytes;
     proof_->write(bytes, f_);
     ZkMultiProof<Field> proof(*lay_, kRate, kQueries);
@@ -470,7 +480,8 @@ class MlDsaCredential {
     }
 
     // The credential and the issuer's mu = SHAKE256(tr || 0 || 0 || D).
-    b.cred = hash_credential(sp, sec->cred, b.id, kCft);
+    b.cred = hash_credential(sp, sec->cred, b.id, kCft,
+                             sec->id_values_from_credential);
     const auto issuer_tr = shake256(show.issuer_pk, 64);
     const uint8_t head[2] = {0, 0};
     const Bytes h = const_bytes(head, 2);
@@ -478,14 +489,23 @@ class MlDsaCredential {
     b.issuer_mu =
         sp.shake(kShake256Rate, cat({&itr, &h, &b.cred.digest}), 64);
 
-    // The user's message: the nonce, or the C4 tag SHAKE256(T || R2).
+    // The user's message: the nonce, or SHAKE256(T || R2) with T the event
+    // tag of the request.
     Bytes msg;
     if (kCft) {
-      const Bytes t = const_bytes(show.t.data(), 32);
+      const auto tag = event_tag(show.now, show.rid, show.verifier);
+      const Bytes t = const_bytes(tag.data(), tag.size());
       const Bytes r2 = free_bytes(sec->r2.data(), 32);
       Bytes in;
       msg = sp.shake(kShake256Rate, cat({&t, &r2}), kHashDigestSize, &in);
-      b.r2 = slice(in, 32, 32);
+      b.r2 = slice(in, tag.size(), 32);
+      // The public binding H of the encrypted ID || R2.
+      const Bytes binding =
+          sp.shake(kShake256Rate, cat({&b.id, &b.r2}), kHashDigestSize);
+      for (size_t i = 0; i < binding.size(); ++i) {
+        b.links.fixed(binding[i].r,
+                      (show.h[i / 8] >> (i % 8)) & 1 ? f_.one() : f_.zero());
+      }
     } else {
       msg = const_bytes(show.nonce.data(), 32);
     }
@@ -548,27 +568,7 @@ class MlDsaCredential {
       l.bit(at(1, t1_off + i), b.pk[256 + i]);
     }
     for (size_t i = 0; i < 8 * 64; ++i) l.bit(at(1, mu_off + i), b.user_mu[i]);
-
-    // With CFT, the signature is public: C4.
-    if (kCft) {
-      const auto sig = ml_dsa::sigDecode<Params>(show.c4);
-      check(sig.has_value(), "C4 encoding");
-      for (size_t i = 0; i < 8 * Params::c_tilde_bytes; ++i) {
-        l.fixed(at(1, KV::kCTilde + i),
-                (sig->c_tilde[i / 8] >> (i % 8)) & 1 ? f_.one() : f_.zero());
-      }
-      for (size_t i = 0; i < Params::L; ++i) {
-        for (size_t c = 0; c < kN; ++c) {
-          l.fixed(at(1, KV::kZ + i * kN + c), f_.of_scalar(sig->z[i][c]));
-        }
-      }
-      for (size_t i = 0; i < Params::K; ++i) {
-        for (size_t c = 0; c < kN; ++c) {
-          l.fixed(at(1, KV::kH + i * kN + c),
-                  sig->h[i][c] ? f_.one() : f_.zero());
-        }
-      }
-    }
+    // The user signature (C4 with CFT) stays private.
   }
 
   void link_rej(Built& b) const {
@@ -612,7 +612,7 @@ class MlDsaCredential {
     }
     for (size_t i = 0; i < n; ++i) d.v_[2 * i] = one.v_[i];
     const std::vector<uint8_t> msg =
-        kCft ? shake256(cat_bytes(show.t, sec.r2), kHashDigestSize)
+        kCft ? c4_message(event_tag(show.now, show.rid, show.verifier), sec.r2)
              : std::vector<uint8_t>(show.nonce.begin(), show.nonce.end());
     if (!KV::witness(sec.user_pk, sec.user_sig, msg, one, f_)) {
       return nullptr;
@@ -621,12 +621,7 @@ class MlDsaCredential {
     return std::make_unique<PackedLayer<Field>>(d, f_);
   }
 
-  static std::vector<uint8_t> cat_bytes(const std::array<uint8_t, 32>& a,
-                                        const std::array<uint8_t, 32>& b) {
-    std::vector<uint8_t> r(a.begin(), a.end());
-    r.insert(r.end(), b.begin(), b.end());
-    return r;
-  }
+
 
   std::unique_ptr<PackedLayer<Field>> fill_rej(const Built& b) const {
     auto w = std::make_unique<PackedLayer<Field>>(kPolys, rej_->ninputs, f_);

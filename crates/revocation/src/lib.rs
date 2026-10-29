@@ -1,11 +1,12 @@
-//! Baby Jubjub CFT anonymity-revocation benchmarks: direct decryption,
-//! link-then-decrypt, and the MP-SPDZ plaintext-equivalence sweep.
+//! CFT anonymity-revocation benchmarks: direct decryption, link-then-decrypt,
+//! and the MP-SPDZ plaintext-equivalence sweep.
 //!
-//! The C4 binding uses the shared `babyjub` crate. Without the `pq` feature,
-//! C4 is EdDSA-Poseidon and the tags produced here are the ones the
-//! zk-friendly `prove_verify.circom` accepts; with it, the C4 message is
-//! SHAKE256 (see [`hash`]) and C4 is the post-quantum signature chosen at
-//! compile time (see [`pq_sig`]).
+//! Without the `pq` feature, the CFT is ElGamal over Baby Jubjub ([`cft`])
+//! with an EdDSA-Poseidon C4 ([`c4`]), the tags the zk-friendly
+//! `prove_verify.circom` accepts. With it, the CFT is threshold Module-LWE
+//! encryption with a post-quantum C4 ([`lwe_cft`]), decrypted in the MPC
+//! (`mpc/lwe_decrypt.mpc`); link-then-decrypt and the plaintext-equivalence
+//! test need ElGamal and stop with an error.
 
 pub mod c4;
 pub mod cft;
@@ -13,8 +14,8 @@ pub mod csv;
 pub mod env;
 pub mod experiment;
 pub mod hash;
+#[cfg(feature = "pq")]
+pub mod lwe_cft;
 pub mod mpc_runner;
 pub mod paths;
-#[cfg(feature = "pq")]
-pub mod pq_sig;
 pub mod stats;

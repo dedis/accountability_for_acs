@@ -1,4 +1,5 @@
-//! Packed status-list Merkle trees with all-zero leaves.
+//! Packed status-list Merkle trees with all-zero leaves, for any node type and
+//! node hash: Poseidon ([`PackedTree::build`]) or SHAKE256 (`pq::revocation`).
 //!
 //! Every leaf is zero, so a level's two children are always equal and the whole
 //! tree collapses to one hash per level. Witness generation is `O(depth)`
@@ -21,22 +22,27 @@ pub fn packed_merkle_depth(population: u64, bits_per_leaf: u32) -> u32 {
 
 /// A uniform all-zero tree: `level_hash[i]` is the value of every node at
 /// level `i`, and `level_hash[depth]` is the root.
-pub struct PackedTree {
-    level_hash: Vec<Fq>,
+pub struct PackedTree<T = Fq> {
+    level_hash: Vec<T>,
     pub depth: u32,
     pub bits_per_leaf: u32,
 }
 
-impl PackedTree {
-    pub fn build(poseidon: &Poseidon, population: u64, bits_per_leaf: u32) -> Self {
-        let padded_leaf_count = packed_leaf_count(population, bits_per_leaf);
-        let depth = padded_leaf_count.trailing_zeros();
-
+impl<T: Copy> PackedTree<T> {
+    /// The tree for `population` credentials, with leaves `zero` and a parent
+    /// being `node(left, right)`.
+    pub fn from_zero(
+        population: u64,
+        bits_per_leaf: u32,
+        zero: T,
+        node: impl Fn(&T, &T) -> T,
+    ) -> Self {
+        let depth = packed_leaf_count(population, bits_per_leaf).trailing_zeros();
         let mut level_hash = Vec::with_capacity(depth as usize + 1);
-        level_hash.push(Fq::from(0u64));
+        level_hash.push(zero);
         for i in 0..depth as usize {
             let child = level_hash[i];
-            level_hash.push(poseidon.hash(&[child, child]));
+            level_hash.push(node(&child, &child));
         }
 
         Self {
@@ -46,18 +52,34 @@ impl PackedTree {
         }
     }
 
-    pub fn root(&self) -> Fq {
+    pub fn root(&self) -> T {
         self.level_hash[self.depth as usize]
+    }
+
+    /// The leaf and the bit of `credential_index`.
+    pub fn position(&self, credential_index: u64) -> (u64, u64) {
+        let bits = u64::from(self.bits_per_leaf);
+        (credential_index / bits, credential_index % bits)
+    }
+
+    /// The siblings of any leaf, bottom-up.
+    pub fn path(&self) -> &[T] {
+        &self.level_hash[..self.depth as usize]
+    }
+}
+
+impl PackedTree {
+    pub fn build(poseidon: &Poseidon, population: u64, bits_per_leaf: u32) -> Self {
+        Self::from_zero(population, bits_per_leaf, Fq::from(0u64), |l, r| {
+            poseidon.hash(&[*l, *r])
+        })
     }
 
     /// Witness that `credential_index` is not revoked.
     pub fn proof_for(&self, credential_index: u64) -> PackedProof {
-        let leaf_index = credential_index / u64::from(self.bits_per_leaf);
-        let bit_index = credential_index % u64::from(self.bits_per_leaf);
+        let (leaf_index, bit_index) = self.position(credential_index);
 
-        let path_elements = (0..self.depth as usize)
-            .map(|i| self.level_hash[i].to_string())
-            .collect();
+        let path_elements = self.path().iter().map(Fq::to_string).collect();
         let path_indices = (0..self.depth)
             .map(|i| ((leaf_index >> i) & 1).to_string())
             .collect();

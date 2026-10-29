@@ -45,6 +45,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    zk_friendly::require_classical()?;
     let args = Args::parse();
     let artifacts_dir = paths::artifacts(VARIANT);
     std::fs::create_dir_all(&artifacts_dir)?;

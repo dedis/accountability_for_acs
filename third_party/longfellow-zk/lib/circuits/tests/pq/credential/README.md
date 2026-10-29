@@ -21,9 +21,16 @@ the 32 leaves, signed by the issuer):
 - without CFT: a signature on a public 32-byte nonce verifies under a
   private hardware key whose ID = SHAKE256(public key, 64 bytes) is in
   attributes 14 and 15;
-- with CFT: the public C4 signature on SHAKE256(T || R2) verifies under a
+- with CFT: the private C4 signature on SHAKE256(T || R2) verifies under a
   private user key whose ID is in attributes 0 and 1, and the public
-  ciphertext (U, V) encrypts ID || R2 under the authorities' key (`lwe.h`).
+  ciphertext (U, V) encrypts ID || R2 under the authorities' key (`lwe.h`),
+  with the public binding H = SHAKE256(ID || R2) (`cft_binding`).
+  T = SHAKE256(be64(NOW) || RID || VERIFIER) is the event tag of the request
+  (`event_tag`, `credential.h`, digest-sized), so a show verifies for one
+  request of one verifier only; a verifier rejects NOW or MAX_BIRTH of
+  2^43 or more. C4 stays private because ML-DSA and SLH-DSA signatures show
+  their public key without the message. The authorities verify the stored
+  proof before opening, and check the opened ID || R2 against H after.
 
 The private keys are verified in full: for ML-DSA the matrix A is computed
 in the circuit from rho (ExpandA, 5 SHAKE128 blocks per polynomial, and
@@ -31,10 +38,14 @@ RejNTTPoly with a 5-bit offset per coefficient) and tr = SHAKE256(pk) is
 hashed in the circuit; for SLH-DSA, PK.seed and PK.root are private bits
 of every hash step.
 
-The Module-LWE parameters are provisional, not checked with the lattice
-estimator (`lwe.h`): q = 8380417, rank 5 and secrets in [-4, 4] for
-category 3, rank 7 and [-2, 2] for category 5, three message polynomials
-(768 bits: ID || R2).
+The Module-LWE parameters (`lwe.h`): q = 8380417, rank 5 and secrets in
+[-4, 4] for category 3, rank 7 and [-2, 2] for category 5, three message
+polynomials (768 bits: ID || R2). `tools/lwe_estimate.py` (repository root)
+checks with the lattice estimator that they cost at least as much to attack
+as the Module-LWE instance of ML-DSA-65 and ML-DSA-87.
+`Lwe.MatchesTheRustKnownAnswer` checks that `lwe.h` and the Rust
+implementation (`crates/pqc/src/lwe.rs`) give the same ciphertext
+(`testdata/lwe_kat_3.txt`, `testdata/lwe_kat_5.txt`).
 
 ## Design
 
@@ -53,8 +64,8 @@ category 3, rank 7 and [-2, 2] for category 5, three message polynomials
   sponge, age and step (the hash steps of both SLH-DSA verifications,
   `../slh_dsa`, in parts of at most 4,096 copies, the one-block copies in
   their own parts); with CFT, a second proof
-  over Fq^12 with a sponge copy and lwe. Both proofs compute the public H = SHAKE256(ID || R2 || SALT),
-  with a private 32-byte SALT, so they encrypt and sign the same ID and R2.
+  over Fq^12 with a sponge copy and lwe. Both proofs compute the public
+  H = SHAKE256(ID || R2), so they encrypt and sign the same ID and R2.
 - `ossl_sig.h`: key generation and signing with OpenSSL 3.5 or newer.
 
 Each proof has the soundness of its category (192 or 256 bits, checked by

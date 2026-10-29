@@ -19,8 +19,10 @@ migrating the construction to **post-quantum cryptography**.
 ├── crates/
 │   ├── bench-core/             paths, the --out flag, timing, statistics, summary JSON (no crypto)
 │   ├── babyjub/                Baby Jubjub, Poseidon, EdDSA-Poseidon (circomlib parameters)
+│   ├── pqc/                    SHAKE256, ML-DSA / SLH-DSA, threshold Module-LWE encryption
 │   ├── revocation/             anonymity revocation: direct, link, and MP-SPDZ decrypt
-│   ├── zk-friendly/            proof generation/verification: Circom / Groth16
+│   ├── zk-friendly/            proof generation/verification: Circom / Groth16 (classical);
+│   │                           post-quantum credential model
 │   └── standard/               proof generation/verification: Longfellow (P-256 + SHA-256)
 ├── third_party/longfellow-zk/  vendored Longfellow (Apache 2.0, Google LLC), with experimental
 │                               ML-DSA, SLH-DSA and credential proofs (lib/circuits/tests/pq/)
@@ -31,8 +33,8 @@ migrating the construction to **post-quantum cryptography**.
 
 The proof benchmarks (`zk-friendly`, `standard`) each come in three variants:
 with a CFT, without a CFT, and with a CFT plus a non-revocation proof.
-`revocation` and `zk-friendly` depend on `babyjub` and `bench-core`;
-`standard` depends on `bench-core` only. No stack depends on another.
+`revocation` and `zk-friendly` depend on `babyjub`, `pqc` and `bench-core`;
+`standard` depends on `pqc` and `bench-core`. No stack depends on another.
 
 ## Quick start
 
@@ -43,9 +45,18 @@ python3 tools/benchmark.py                       # every benchmark in Docker, th
 ```
 
 The default build is post-quantum (`pq` feature of `standard`, `revocation`
-and `zk-friendly`): SHAKE256 replaces SHA-256 and the native Poseidon hashes,
-C4 in `revocation` is signed with a post-quantum signature, and `standard` adds
-`standard_signature`, a proof of that signature's verification.
+and `zk-friendly`, primitives in `crates/pqc`):
+
+- SHAKE256 replaces SHA-256 and Poseidon;
+- ML-DSA or SLH-DSA (chosen at compile time) replaces EdDSA for the C4,
+  issuer and hardware-key signatures, and `standard` adds
+  `standard_signature`, a proof of that signature's verification;
+- the CFT is threshold Module-LWE encryption in place of ElGamal: the police,
+  the judge and the NGO share the key additively, refresh their shares without
+  changing the public key or stored CFTs, and decrypt in MP-SPDZ.
+
+Link-then-decrypt, the plaintext-equivalence test and the Circom/Groth16
+benchmarks need ElGamal or pairings and stop with an error in this build.
 `cargo build-classical` builds the classical version. `PQ_MIGRATION.md`
 tracks the migration.
 
@@ -79,9 +90,10 @@ Measured on one Mac:
 | SLH-DSA-SHAKE-256s | 5        | GF(2^384), 374, 64 B     | 256.4 bits | 29,792 B  | 1,092 ms | 83.2 s  | 8.27 s | 5.87 MB  | 4.5 GB      |
 | SLH-DSA-SHAKE-256f | 5        | GF(2^384), 374, 64 B     | 256.4 bits | 49,856 B  | 115 ms   | 175.6 s | 18.5 s | 10.58 MB | 8.9 GB      |
 
-- **Sign**: median native signing of a 32-byte message with the system's
-  signer (`revocation::pq_sig`); 201 runs for ML-DSA, 9 for the s variants,
-  51 for the f variants. ML-DSA signing takes 0.1 to 1.2 ms because of its
+- **Sign**: median native signing with the system's signer (`pqc::sig`); 201
+  runs for ML-DSA, 9 for the s variants, 51 for the f variants. These numbers
+  were measured on a 32-byte message; `standard_signature` now signs a message
+  of the C4 size (`SHAKE256(t ‖ r2)`: 48 bytes, 64 at level 5). ML-DSA signing takes 0.1 to 1.2 ms because of its
   rejection sampling.
 - **Prove, Verify, Proof, Peak memory**: the ZK proof of the signature's
   verification. ML-DSA: median of 5 runs. SLH-DSA: one run.

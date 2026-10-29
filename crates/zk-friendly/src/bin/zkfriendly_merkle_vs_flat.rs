@@ -491,6 +491,7 @@ fn remove_generated_circuits() {
 }
 
 fn main() -> Result<()> {
+    zk_friendly::require_classical()?;
     let args = Args::parse();
     // A Merkle inclusion proof needs a power-of-two leaf count and depth >= 1.
     if let Some(n) = args.totals.iter().find(|n| **n < 2 || !n.is_power_of_two()) {

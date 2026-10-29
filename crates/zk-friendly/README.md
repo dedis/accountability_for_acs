@@ -1,7 +1,28 @@
 # zk-friendly (Circom / Groth16)
 
 Age-check presentation benchmarks: circom witness + rapidsnark prove + native
-Groth16 verify.
+Groth16 verify, over the classical credential (Poseidon, EdDSA and ElGamal over
+Baby Jubjub). Groth16 relies on pairings, which a quantum computer breaks, and
+cannot prove the post-quantum credential, so the benchmarks need the classical
+build (`--no-default-features`); with the `pq` feature (default) they stop with
+an error.
+
+The `pq` feature adds the post-quantum credential model (`src/pq/`), the
+statement of the standard stack's post-quantum credential proof
+(`third_party/longfellow-zk/lib/circuits/tests/pq/credential`), with the
+shared `pqc` crate:
+
+- SHAKE256 in place of Poseidon and SHA-256: attribute leaves
+  `SHAKE256(be32(i) || attribute)`, the credential digest, Merkle trees and the
+  status list (48-byte digests, 64 with `level-5`);
+- the signature chosen at compile time (ML-DSA-65 by default; `slh-dsa`,
+  `slh-dsa-f`, `level-5` as in `tools/build.py`) in place of EdDSA, for the
+  issuer, C4 (`SHAKE256(t || r2)`, with `t` the event tag of the request;
+  private, as a PQ signature shows its key) and the hardware key;
+- threshold Module-LWE encryption of `ID || r2` in place of ElGamal.
+
+No proof system proves it here yet; its tests check
+the statement natively and decrypt the CFT with the authorities' shares.
 
 ## Setup
 
@@ -10,7 +31,7 @@ Docker image), plus the pinned downloads:
 
 ```bash
 python3 tools/fetch.py            # .work/downloads/{ppot_0080_19.ptau,circomlib/}
-cargo build --release -p zk-friendly
+cargo build --release -p zk-friendly --no-default-features
 ```
 
 `snarkjs` is used only for the one-off Groth16 setup (`groth16 setup`,
@@ -19,11 +40,11 @@ cargo build --release -p zk-friendly
 ## Benchmarks
 
 ```bash
-cargo run --release --bin zkfriendly_prove_verify             # age-check + CFT
-cargo run --release --bin zkfriendly_prove_verify_no_cft      # same, no CFT
-cargo run --release --bin zkfriendly_prove_verify_revocation  # + non-revocation claim (2^12…2^24)
-cargo run --release --bin zkfriendly_merkle_vs_flat           # attribute-commitment sweep
-cargo run --release --bin zkfriendly_communication_size       # wire size
+cargo run --release --no-default-features --bin zkfriendly_prove_verify             # age-check + CFT
+cargo run --release --no-default-features --bin zkfriendly_prove_verify_no_cft      # same, no CFT
+cargo run --release --no-default-features --bin zkfriendly_prove_verify_revocation  # + non-revocation claim (2^12…2^24)
+cargo run --release --no-default-features --bin zkfriendly_merkle_vs_flat           # attribute-commitment sweep
+cargo run --release --no-default-features --bin zkfriendly_communication_size       # wire size
 ```
 
 Each writes `summary.json` to `--out DIR` (default
@@ -66,7 +87,8 @@ To start over, delete `.work/zk-friendly/`.
 
 ```bash
 python3 tools/fetch.py
-docker build -t zk-friendly-bench-rs -f crates/zk-friendly/Dockerfile .
+docker build --build-arg CARGO_FEATURES=--no-default-features \
+  -t zk-friendly-bench-rs -f crates/zk-friendly/Dockerfile .
 docker run --rm --cpus=2 --memory=16g --memory-swap=16g zk-friendly-bench-rs \
   bash -c './target/release/zkfriendly_prove_verify --out /tmp/out && cat /tmp/out/summary.json'
 ```

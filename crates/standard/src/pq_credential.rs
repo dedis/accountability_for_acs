@@ -2,7 +2,7 @@
 //! `lib/circuits/tests/pq/credential`) for the signature chosen at compile
 //! time: the issuer signature and the hardware (no CFT) or C4 (CFT)
 //! signature are ML-DSA or SLH-DSA, every hash is SHAKE256, and the CFT
-//! encryption is Module-LWE with provisional parameters. Built with the
+//! encryption is Module-LWE (`crates/pqc/src/lwe.rs`). Built with the
 //! `pq` feature.
 //!
 //! | Features | Scheme | Program |

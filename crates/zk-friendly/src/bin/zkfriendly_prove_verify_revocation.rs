@@ -245,6 +245,7 @@ fn bench_scale(ctx: &Context<'_>, revoc_log2: u32, rng: &mut StdRng) -> Result<S
 }
 
 fn main() -> Result<()> {
+    zk_friendly::require_classical()?;
     let args = Args::parse();
     let artifacts_dir = paths::artifacts(BENCH);
     std::fs::create_dir_all(&artifacts_dir)?;

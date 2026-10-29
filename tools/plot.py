@@ -250,7 +250,11 @@ def revocation_cft() -> None:
     for ax, bench, title in zip(axes, ("direct-decrypt", "link-decrypt"),
                                 ("Direct decrypt", "Link then decrypt")):
         for env, root in sources.items():
-            for pct, rows in read_summary(root / f"{bench}_summary.csv").items():
+            # The post-quantum build has no link-then-decrypt (ElGamal only).
+            summary = root / f"{bench}_summary.csv"
+            if not summary.is_file():
+                continue
+            for pct, rows in read_summary(summary).items():
                 rows.sort()
                 ax.plot([r[0] for r in rows], [r[1] for r in rows],
                         color=ENVS[env]["color"], marker=ENVS[env]["marker"],

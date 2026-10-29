@@ -18,6 +18,7 @@
 #ifndef PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_CREDENTIAL_CREDENTIAL_H_
 #define PRIVACY_PROOFS_ZK_LIB_CIRCUITS_TESTS_PQ_CREDENTIAL_CREDENTIAL_H_
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +47,52 @@ inline std::vector<uint8_t> shake256(const std::vector<uint8_t>& in,
   std::vector<uint8_t> r(out);
   Sha3Reference::shake256Hash(in.data(), in.size(), r.data(), out);
   return r;
+}
+
+// A SHAKE256 digest of kHashDigestSize bytes.
+using HashBytes = std::array<uint8_t, kHashDigestSize>;
+
+inline HashBytes shake256_digest(const std::vector<uint8_t>& in) {
+  HashBytes r;
+  Sha3Reference::shake256Hash(in.data(), in.size(), r.data(), r.size());
+  return r;
+}
+
+// The event tag of a presentation request, from its public transcript:
+// t = SHAKE256(be64(TS) || RID || VERIFIER), kHashDigestSize bytes. C4
+// signs it, which binds a presentation to one request of one verifier.
+inline HashBytes event_tag(uint64_t ts, const std::array<uint8_t, 32>& rid,
+                           const std::array<uint8_t, 32>& verifier) {
+  std::vector<uint8_t> in(8);
+  for (size_t i = 0; i < 8; ++i) in[i] = static_cast<uint8_t>(ts >> (56 - 8 * i));
+  in.insert(in.end(), rid.begin(), rid.end());
+  in.insert(in.end(), verifier.begin(), verifier.end());
+  return shake256_digest(in);
+}
+
+// The message C4 signs: SHAKE256(T || R2).
+inline std::vector<uint8_t> c4_message(const HashBytes& t,
+                                       const std::array<uint8_t, 32>& r2) {
+  std::vector<uint8_t> in(t.begin(), t.end());
+  in.insert(in.end(), r2.begin(), r2.end());
+  return shake256(in, kHashDigestSize);
+}
+
+// H = SHAKE256(ID || R2), the public binding of a CFT to the message it
+// encrypts; the fresh, private, 256-bit R2 hides ID. After opening, the
+// authorities check the opened ID || R2 against it: a mismatch shows that
+// an authority changed its decryption share.
+inline HashBytes cft_binding(const std::vector<uint8_t>& id,
+                             const std::array<uint8_t, 32>& r2) {
+  std::vector<uint8_t> in(id);
+  in.insert(in.end(), r2.begin(), r2.end());
+  return shake256_digest(in);
+}
+
+// NOW and MAX_BIRTH fit the kTsBits bits the age circuit compares; a
+// verifier rejects other values, which the circuit would truncate.
+inline bool timestamps_fit(uint64_t now, uint64_t max_birth) {
+  return now < (uint64_t(1) << kTsBits) && max_birth < (uint64_t(1) << kTsBits);
 }
 
 struct Credential {
@@ -101,10 +148,14 @@ struct CredentialRefs {
 };
 
 // Hashes the used leaves of C (zeros for the verifier) and D. ID: the 64
-// ID bytes, references to their definition.
+// ID bytes, references to their definition. ID_VALUES_FROM_CREDENTIAL, for
+// tests only: the ID attribute bits keep their references to ID but take
+// their native values from C, the witness of a cheating prover that breaks
+// only these links.
 template <class Field>
 CredentialRefs hash_credential(Sponge<Field>& sp, const Credential& c,
-                               const Bytes& id, bool cft) {
+                               const Bytes& id, bool cft,
+                               bool id_values_from_credential = false) {
   check(id.size() == 8 * kIdBytes, "ID length");
   CredentialRefs r;
   const size_t sid = id_slot(cft);
@@ -125,6 +176,11 @@ CredentialRefs hash_credential(Sponge<Field>& sp, const Credential& c,
     Bytes attr;
     if (ts == 3) {
       attr = slice(id, i == sid ? 0 : kAttrBytes, kAttrBytes);
+      if (id_values_from_credential) {
+        for (size_t k = 0; k < attr.size(); ++k) {
+          attr[k].value = (c.attr[i][k / 8] >> (k % 8)) & 1;
+        }
+      }
     } else {
       // Big-endian; the bits above kTsBits are zero.
       attr = const_bytes(c.attr[i].data(), kAttrBytes);

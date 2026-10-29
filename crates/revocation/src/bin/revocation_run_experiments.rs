@@ -1,4 +1,5 @@
-//! Runs direct-decrypt then link-decrypt, sharing one crypto context.
+//! Runs direct-decrypt then link-decrypt (direct-decrypt only in the
+//! post-quantum build), sharing one crypto context.
 
 use anyhow::Result;
 use bench_core::cli::Out;
@@ -16,9 +17,9 @@ struct Args {
 
 fn main() -> Result<()> {
     let dir = Args::parse().out.out.unwrap_or_else(paths::experiments);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new()?;
 
-    for (index, benchmark) in Benchmark::ALL.into_iter().enumerate() {
+    for (index, &benchmark) in Benchmark::ALL.iter().enumerate() {
         if index > 0 {
             println!("\n{}\n", "─".repeat(60));
         }

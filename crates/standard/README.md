@@ -51,7 +51,7 @@ has the soundness of its NIST category (192 bits at level 3, 256 bits at
 level 5). SLH-DSA needs 2.1 GB (192s), 4.5 GB (256s), 5.7 GB (192f) or
 8.9 GB (256f) of memory. Its summary also has the native signing time of
 the same scheme (`statsMs.sign`, `avgMs.sign`), measured with the C4 signer
-of `revocation` (fips204 / fips205) once per repetition.
+of `pqc` (fips204 / fips205) once per repetition.
 
 ```bash
 cargo run --release --bin standard_prove_verify
@@ -75,7 +75,7 @@ also reads its environment variable:
 | `BENCH_FILTER` | `--filter` | per benchmark | Google Benchmark filter regex |
 | `BENCH_METRIC` | `--metric` | `both` | `--verbose` timing column |
 | `BENCH_WARMUP` | — | on | `0`/`false`/`no` skips the discarded repetition |
-| `PQ_CIRCUIT_CACHE` | — | `pq-circuits` in the temporary directory | Compiled circuits of the post-quantum proofs: the warm-up stores them, the measured run loads them |
+| `PQ_CIRCUIT_CACHE` | — | `.work/standard/pq-circuits` | Compiled circuits of the post-quantum proofs: the warm-up stores them, the measured run loads them. Trusted, so the directory must belong to the user and not be writable by others (created with mode 0700) |
 | `CLEAN` | `--clean` | off | Empty the output directory first |
 | `REVOC_LOG2_LIST` / `REVOC_LOG2` | `--revoc-log2` | `12,16,20,24` | Revocation population scales; `REVOC_LOG2_LIST` takes precedence |
 | `TOTAL_ATTRS` | `--total-attrs` / `--attr` | `8,16,32,64` | merkle-vs-flat: credential sizes \(n\) |

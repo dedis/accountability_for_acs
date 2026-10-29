@@ -1,0 +1,43 @@
+# lwe_decrypt.mpc
+#
+# Compile: ./compile.py lwe_decrypt <N>
+#
+# Opens N post-quantum CFTs (crates/revocation/src/lwe_cft.rs) from the three
+# authorities' Module-LWE decryption shares, as pqc::lwe::combine: per
+# coefficient, x = d0 + d1 + d2 with every share in [0, q), w = x mod q, and
+# bit 1 when q/4 < w < q - q/4. Only the 768 message bits of each CFT
+# (ID || r2) are revealed, packed in 24 words of 32 bits, bit i of the
+# message at bit i % 32 of word i / 32. No share and no sum is revealed.
+#
+# Inputs: party p (0 police, 1 judge, 2 NGO) gives, for each CFT in order,
+# its 768 share coefficients, slot by slot.
+
+from Compiler.types import sint
+from Compiler.library import print_ln, for_range
+
+N = int(program.args[1])
+Q = 8380417
+LO = Q // 4
+HI = Q - Q // 4
+COEFFS = 768
+WORDS = COEFFS // 32
+
+# Every value compared lies in [0, 3q), 3q < 2^25: 27-bit signed comparisons
+# hold them and their differences with the constants.
+program.set_bit_length(27)
+
+bits = sint.Array(COEFFS)
+
+
+@for_range(N)
+def _(i):
+    x = sint.get_input_from(0, size=COEFFS)
+    x = x + sint.get_input_from(1, size=COEFFS)
+    x = x + sint.get_input_from(2, size=COEFFS)
+    w = x - (x >= Q) * Q - (x >= 2 * Q) * Q
+    bits.assign_vector((w > LO) * (w < HI))
+    words = [
+        sum(bits[32 * k + t] * (1 << t) for t in range(32)).reveal()
+        for k in range(WORDS)
+    ]
+    print_ln('cft_%s=' + ','.join(['%s'] * WORDS), i, *words)

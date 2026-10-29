@@ -558,6 +558,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pqc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fips204",
+ "fips205",
+ "rand",
+ "sha3",
+ "zeroize",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -644,11 +656,10 @@ dependencies = [
  "babyjub",
  "bench-core",
  "clap",
- "fips204",
- "fips205",
+ "pqc",
  "rand",
  "regex",
- "sha3",
+ "zeroize",
 ]
 
 [[package]]
@@ -722,8 +733,8 @@ dependencies = [
  "anyhow",
  "bench-core",
  "clap",
+ "pqc",
  "regex",
- "revocation",
  "serde",
  "serde_json",
 ]
@@ -873,12 +884,12 @@ dependencies = [
  "babyjub",
  "bench-core",
  "clap",
+ "pqc",
  "rand",
  "regex",
  "serde",
  "serde_json",
  "sha2",
- "sha3",
 ]
 
 [[package]]

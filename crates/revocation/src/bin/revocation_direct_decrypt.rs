@@ -18,6 +18,6 @@ fn main() -> Result<()> {
     let dir = Args::parse().out.out.unwrap_or_else(paths::experiments);
     let benchmark = Benchmark::DirectDecrypt;
     let options = Options::from_env(benchmark, dir)?;
-    experiment::run(benchmark, &mut Context::new(), &options)?;
+    experiment::run(benchmark, &mut Context::new()?, &options)?;
     Ok(())
 }

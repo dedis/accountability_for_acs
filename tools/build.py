@@ -5,7 +5,9 @@
   python3 tools/build.py --nist-level=5 --algorithm=slh-dsa-f
   python3 tools/build.py --algorithm=slh-dsa-s -- --bin standard_signature
 
-The signature is C4 in revocation and the proof of standard_signature:
+The signature is C4 in revocation, the issuer and C4 signatures of the
+post-quantum credential model of zk-friendly, and the proof of
+standard_signature:
 
   --algorithm  ml-dsa (default) | slh-dsa-s (small signatures) | slh-dsa-f (fast signing)
   --nist-level 3 (default) | 5
@@ -17,7 +19,8 @@ The signature is C4 in revocation and the proof of standard_signature:
 | slh-dsa-f | SLH-DSA-SHAKE-192f | SLH-DSA-SHAKE-256f |
 
 The choice maps to the Cargo features pq, slh-dsa, slh-dsa-f and level-5 of
-revocation and standard. Arguments after -- go to `cargo build --release`.
+revocation, standard and zk-friendly. Arguments after -- go to
+`cargo build --release`.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]  # the workspace root
 ALGORITHMS = {"ml-dsa": ["pq"], "slh-dsa-s": ["slh-dsa"], "slh-dsa-f": ["slh-dsa-f"]}
 LEVELS = {"3": [], "5": ["level-5"]}
 # The crates whose signature the features choose.
-CRATES = ("revocation", "standard")
+CRATES = ("revocation", "standard", "zk-friendly")
 
 
 def features(algorithm: str, level: str) -> list[str]:

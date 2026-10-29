@@ -2,22 +2,25 @@
 //! orchestration: no protocol logic.
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
+use zeroize::Zeroize;
 
-/// Compiles `<name>.mpc` with the given arguments, reusing a cached schedule.
+/// Compiles `<name>.mpc` with the given arguments, reusing a cached schedule
+/// compiled from the same source.
 ///
 /// Returns the compiled program name, `<name>-<arg>-<arg>`.
 pub fn compile(spdz_path: &Path, mpc_src: &Path, name: &str, args: &[String]) -> Result<String> {
     let src_dir = spdz_path.join("Programs").join("Source");
     fs::create_dir_all(&src_dir).with_context(|| format!("create {}", src_dir.display()))?;
-    fs::copy(mpc_src, src_dir.join(format!("{name}.mpc")))
+    let source = fs::read(mpc_src).with_context(|| format!("read {}", mpc_src.display()))?;
+    fs::write(src_dir.join(format!("{name}.mpc")), &source)
         .with_context(|| format!("copy {} into {}", mpc_src.display(), src_dir.display()))?;
 
     let full_name = std::iter::once(name.to_string())
@@ -25,11 +28,12 @@ pub fn compile(spdz_path: &Path, mpc_src: &Path, name: &str, args: &[String]) ->
         .collect::<Vec<_>>()
         .join("-");
 
-    let schedule = spdz_path
-        .join("Programs")
-        .join("Schedules")
-        .join(format!("{full_name}.sch"));
-    if schedule.exists() {
+    // A schedule is reused only with the source it was compiled from, kept
+    // next to it.
+    let schedules = spdz_path.join("Programs").join("Schedules");
+    let schedule = schedules.join(format!("{full_name}.sch"));
+    let compiled_from = schedules.join(format!("{full_name}.source.mpc"));
+    if schedule.exists() && fs::read(&compiled_from).is_ok_and(|s| s == source) {
         println!("[mpc] cached compile for {full_name}");
         return Ok(full_name);
     }
@@ -50,6 +54,8 @@ pub fn compile(spdz_path: &Path, mpc_src: &Path, name: &str, args: &[String]) ->
             String::from_utf8_lossy(&output.stdout),
         );
     }
+    fs::write(&compiled_from, &source)
+        .with_context(|| format!("write {}", compiled_from.display()))?;
     println!(
         "[mpc] compile done ({} ms) -> {full_name}.sch",
         started.elapsed().as_millis()
@@ -63,19 +69,49 @@ pub struct PartyOutput {
     pub stderr: Vec<String>,
 }
 
-/// Launches `parties` copies of `shamir-party.x` and waits for all of them.
+/// The MP-SPDZ protocol: Shamir secret sharing among the three authorities.
+const PROTOCOL: &str = "shamir-party.x";
+
+/// Launches one copy of [`PROTOCOL`] per entry of `inputs` and waits for all
+/// of them, at most `MP_SPDZ_TIMEOUT_S` seconds (default 3600); parties still
+/// running then are killed. Party `p` reads its private inputs, whitespace-separated
+/// integers, from `inputs[p]` on its standard input (`-I`), so no input
+/// reaches the disk; `inputs` is set to zero afterwards. Every party prints
+/// its output (`-OF .`). `MP_SPDZ_PORT`, when set, is the parties' base port
+/// (`-pn`; MP-SPDZ's default is 5000, which the macOS AirPlay receiver
+/// holds).
 ///
-/// Each pipe is drained on its own thread: MP-SPDZ is verbose under `-v` and a
-/// party blocks once a pipe buffer fills.
-pub fn run(spdz_path: &Path, full_name: &str, parties: usize) -> Result<PartyOutput> {
-    println!("[mpc] launching {parties} parties: shamir-party.x {full_name}");
+/// Each pipe is written or drained on its own thread: MP-SPDZ is verbose
+/// under `-v` and a party blocks once a pipe buffer fills.
+pub fn run(spdz_path: &Path, full_name: &str, mut inputs: Vec<String>) -> Result<PartyOutput> {
+    let output = run_parties(spdz_path, full_name, &inputs);
+    inputs.zeroize();
+    output
+}
+
+fn run_parties(spdz_path: &Path, full_name: &str, inputs: &[String]) -> Result<PartyOutput> {
+    let parties = inputs.len();
+    println!("[mpc] launching {parties} parties: {PROTOCOL} {full_name}");
     let started = Instant::now();
+    let port = crate::env::var("MP_SPDZ_PORT");
+    let limit = Duration::from_secs(crate::env::usize_or("MP_SPDZ_TIMEOUT_S", 3600)? as u64);
 
     let mut children = Vec::with_capacity(parties);
     for party in 0..parties {
-        let child = Command::new("./shamir-party.x")
+        let mut command = Command::new(format!("./{PROTOCOL}"));
+        if let Some(port) = &port {
+            command.args(["-pn", port]);
+        }
+        // No memory dump: MP-SPDZ would write every party's shares of its
+        // secret memory to Player-Data after the run.
+        let child = command
             .args([
                 "-v",
+                "-I",
+                "-OF",
+                ".",
+                "-o",
+                "no_memory_output",
                 "-N",
                 &parties.to_string(),
                 "-p",
@@ -83,64 +119,123 @@ pub fn run(spdz_path: &Path, full_name: &str, parties: usize) -> Result<PartyOut
                 full_name,
             ])
             .current_dir(spdz_path)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawn shamir-party.x -p {party}"))?;
-        children.push(child);
+            .spawn();
+        match child {
+            Ok(child) => children.push(child),
+            Err(e) => {
+                stop(&mut children);
+                return Err(e).with_context(|| format!("spawn {PROTOCOL} -p {party}"));
+            }
+        }
     }
 
-    let mut stdout = vec![String::new(); parties];
-    let mut stderr = vec![String::new(); parties];
-    let mut codes = Vec::with_capacity(parties);
-
-    std::thread::scope(|scope| -> Result<()> {
+    let mut codes: Vec<Option<i32>> = vec![None; parties];
+    let mut written: Vec<std::io::Result<()>> = Vec::new();
+    let mut read: Vec<Result<String>> = Vec::new();
+    std::thread::scope(|scope| {
         let mut readers = Vec::with_capacity(parties * 2);
-        for child in &mut children {
+        let mut writers = Vec::with_capacity(parties);
+        for (child, input) in children.iter_mut().zip(inputs) {
+            let mut stdin = child.stdin.take().expect("piped stdin");
             let out = child.stdout.take().expect("piped stdout");
             let err = child.stderr.take().expect("piped stderr");
+            // Dropping stdin at the end closes it.
+            writers.push(scope.spawn(move || stdin.write_all(input.as_bytes())));
             readers.push(scope.spawn(move || drain(out)));
             readers.push(scope.spawn(move || drain(err)));
         }
 
-        for (i, reader) in readers.into_iter().enumerate() {
-            let text = reader.join().expect("pipe reader thread")?;
-            if i % 2 == 0 {
-                stdout[i / 2] = text;
-            } else {
-                stderr[i / 2] = text;
+        // Every party exits, or is stopped at the time limit, before any pipe
+        // thread is joined: a stuck party cannot block the runner.
+        let polls = limit.as_millis() / POLL.as_millis() + 1;
+        for _ in 0..polls {
+            for (child, code) in children.iter_mut().zip(codes.iter_mut()) {
+                if code.is_none() {
+                    *code = match child.try_wait() {
+                        Ok(Some(status)) => Some(status.code().unwrap_or(-1)),
+                        Ok(None) => None,
+                        Err(_) => {
+                            stop(std::slice::from_mut(child));
+                            Some(-1)
+                        }
+                    };
+                }
             }
+            if codes.iter().all(Option::is_some) || started.elapsed() >= limit {
+                break;
+            }
+            std::thread::sleep(POLL);
         }
-        Ok(())
-    })?;
+        if codes.iter().any(Option::is_none) {
+            stop(&mut children);
+        }
 
-    for (party, child) in children.iter_mut().enumerate() {
-        let status = child
-            .wait()
-            .with_context(|| format!("wait for shamir-party.x -p {party}"))?;
-        codes.push(status.code().unwrap_or(-1));
-    }
+        written = writers
+            .into_iter()
+            .map(|w| w.join().expect("pipe writer thread"))
+            .collect();
+        read = readers
+            .into_iter()
+            .map(|r| r.join().expect("pipe reader thread"))
+            .collect();
+    });
 
     println!(
         "[mpc] done in {} ms (codes: [{}])",
         started.elapsed().as_millis(),
         codes
             .iter()
-            .map(i32::to_string)
+            .map(|c| c.map_or_else(|| "stopped".to_string(), |c| c.to_string()))
             .collect::<Vec<_>>()
             .join(",")
     );
 
-    if codes.iter().any(|c| *c != 0) {
+    let mut stdout = Vec::with_capacity(parties);
+    let mut stderr = Vec::with_capacity(parties);
+    for (i, text) in read.into_iter().enumerate() {
+        let text = text.with_context(|| format!("read the pipes of party {}", i / 2))?;
+        if i % 2 == 0 {
+            stdout.push(text);
+        } else {
+            stderr.push(text);
+        }
+    }
+    // Only stderr: stdout holds the revealed output, which the caller has not
+    // checked yet.
+    if codes.iter().any(Option::is_none) {
         bail!(
-            "MP-SPDZ failed.\nstderr (p0):\n{}\nstdout (p0):\n{}",
-            stderr.first().map_or("", String::as_str),
-            stdout.first().map_or("", String::as_str),
+            "MP-SPDZ did not finish within {} s (MP_SPDZ_TIMEOUT_S); stderr (p0):\n{}",
+            limit.as_secs(),
+            stderr.first().map_or("", String::as_str)
         );
+    }
+    if codes.iter().any(|c| *c != Some(0)) {
+        bail!(
+            "MP-SPDZ failed.\nstderr (p0):\n{}",
+            stderr.first().map_or("", String::as_str)
+        );
+    }
+    for (party, result) in written.into_iter().enumerate() {
+        result.with_context(|| format!("write the inputs of party {party}"))?;
     }
 
     Ok(PartyOutput { stdout, stderr })
+}
+
+/// How often [`run_parties`] checks whether the parties have exited.
+const POLL: Duration = Duration::from_millis(10);
+
+/// Kills and waits for every child. Errors are ignored: a child that has
+/// already exited cannot be killed, and the caller reports the failure that
+/// led here.
+fn stop(children: &mut [Child]) {
+    for child in children {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn drain<R: Read>(mut pipe: R) -> Result<String> {
@@ -149,7 +244,7 @@ fn drain<R: Read>(mut pipe: R) -> Result<String> {
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Reads the `row_<i>=<0|1>` predicate lines party 0 prints.
+/// Reads the `row_<i>=<0|1>` predicate lines a party prints.
 pub fn parse_predicates(stdout: &str, n: usize) -> Result<Vec<bool>> {
     static ROW: OnceLock<Regex> = OnceLock::new();
     let row = ROW.get_or_init(|| Regex::new(r"^row_(\d+)=(\d)").expect("valid regex"));
@@ -182,6 +277,30 @@ pub struct SpdzStats {
     pub data_sent_bytes: Option<u64>,
     pub data_sent_rounds: Option<u64>,
     pub global_data_sent_bytes: Option<u64>,
+}
+
+impl SpdzStats {
+    /// Adds the counters of another run; a counter missing in one run keeps
+    /// the other's value.
+    pub fn add(&mut self, other: &SpdzStats) {
+        fn sum<T: std::ops::Add<Output = T> + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, b) => a.or(b),
+            }
+        }
+        self.total_ms = sum(self.total_ms, other.total_ms);
+        self.online_ms = sum(self.online_ms, other.online_ms);
+        self.offline_ms = sum(self.offline_ms, other.offline_ms);
+        self.online_bytes = sum(self.online_bytes, other.online_bytes);
+        self.online_rounds = sum(self.online_rounds, other.online_rounds);
+        self.offline_bytes = sum(self.offline_bytes, other.offline_bytes);
+        self.offline_rounds = sum(self.offline_rounds, other.offline_rounds);
+        self.data_sent_bytes = sum(self.data_sent_bytes, other.data_sent_bytes);
+        self.data_sent_rounds = sum(self.data_sent_rounds, other.data_sent_rounds);
+        self.global_data_sent_bytes =
+            sum(self.global_data_sent_bytes, other.global_data_sent_bytes);
+    }
 }
 
 fn seconds_to_ms(raw: &str) -> Option<f64> {
@@ -243,22 +362,33 @@ pub fn parse_spdz_stats(combined: &str) -> SpdzStats {
     stats
 }
 
-/// Writes `Player-Data/Input-P<i>-0` for a three-party run.
-///
-/// Party 0 contributes the flattened upper triangle of `M'`; the other two
-/// parties contribute nothing.
-pub fn write_player_inputs(spdz_path: &Path, lines: &[String], parties: usize) -> Result<()> {
-    let dir = spdz_path.join("Player-Data");
-    fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-
-    let mut body = lines.join("\n");
-    body.push('\n');
-    fs::write(dir.join("Input-P0-0"), body).context("write Input-P0-0")?;
-    for party in 1..parties {
-        fs::write(dir.join(format!("Input-P{party}-0")), "")
-            .with_context(|| format!("write Input-P{party}-0"))?;
+/// Reads the `<label>_<i>=<v>,<v>,...` lines a party prints, for `i` in
+/// `0..n`, each with `width` values.
+pub fn parse_rows(stdout: &str, label: &str, n: usize, width: usize) -> Result<Vec<Vec<u64>>> {
+    let prefix = format!("{label}_");
+    let mut out: Vec<Option<Vec<u64>>> = vec![None; n];
+    for line in stdout.lines() {
+        let Some((index, values)) = line
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.split_once('='))
+        else {
+            continue;
+        };
+        let index: usize = index
+            .parse()
+            .with_context(|| format!("{label} row index"))?;
+        let values = values
+            .split(',')
+            .map(|v| v.trim().parse::<u64>())
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("{label} row {index}"))?;
+        if index < n && values.len() == width {
+            out[index] = Some(values);
+        }
     }
-    Ok(())
+    out.into_iter()
+        .collect::<Option<Vec<_>>>()
+        .with_context(|| format!("failed to parse all {n} {label} rows from MP-SPDZ stdout"))
 }
 
 #[cfg(test)]
@@ -270,6 +400,17 @@ mod tests {
         let stdout = "noise\nrow_0=1\nrow_2=0\nrow_1=1\nmore noise\n";
         assert_eq!(parse_predicates(stdout, 3).unwrap(), [true, true, false]);
         assert!(parse_predicates(stdout, 4).is_err());
+    }
+
+    #[test]
+    fn reads_value_rows() {
+        let stdout = "noise\ncft_1=4,5\ncft_0=1,2\ncft_2=7\n";
+        assert_eq!(
+            parse_rows(stdout, "cft", 2, 2).unwrap(),
+            [vec![1, 2], vec![4, 5]]
+        );
+        // Row 2 has the wrong width.
+        assert!(parse_rows(stdout, "cft", 3, 2).is_err());
     }
 
     #[test]

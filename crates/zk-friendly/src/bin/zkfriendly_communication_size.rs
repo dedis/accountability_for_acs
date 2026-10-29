@@ -311,6 +311,7 @@ fn measure_revocation(scales: &[u32], out_dir: &Path) -> Result<Revocation> {
 }
 
 fn main() -> Result<()> {
+    zk_friendly::require_classical()?;
     let args = Args::parse();
     let out_dir = args.out.dir(paths::STACK, "communication_size");
     std::fs::create_dir_all(&out_dir)?;

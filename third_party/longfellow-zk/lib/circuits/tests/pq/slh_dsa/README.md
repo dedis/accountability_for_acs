@@ -139,7 +139,7 @@ the prover is single-threaded. Peak memory is the peak memory footprint of
 | SLH-DSA-SHAKE-256f | 17,803 | GF(2^384), 374 | 256.4 bits | 115 ms | 175.6 s | 18.5 s | 10.58 MB | 8.9 GB |
 
 Sign: median native signing of a 32-byte message with the Rust signer of
-the C4 scheme (fips205 0.4.1; `revocation::pq_sig`), not with this library.
+the C4 scheme (fips205 0.4.1; `revocation::pq_sig`, now `pqc::sig`), not with this library.
 The s variants sign 9.5 to 22 times slower but prove 2.1 to 3.0 times faster:
 signing builds a Merkle tree per layer (2^9 or 2^8 leaves for s, 2^3 or 2^4
 for f), while verification, and so the proof, walks every layer (7 or 8 for

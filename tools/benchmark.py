@@ -2,13 +2,16 @@
 """Runs every benchmark, collects the results and draws the plots.
 
   1. Fetches the pinned downloads (tools/fetch.py) and builds the Docker images.
-  2. Runs the standard (Longfellow, including the signature proof) and
-     zk-friendly benchmarks in Docker with --cpus/--memory; results go to
-     results/<stack>/local-<N>cpu-pq/.
-  3. Reruns the three zk-friendly prove benchmarks with --cpus-full, to show
-     how rapidsnark scales with cores (results/zk-friendly/local-<M>cpu-pq/).
+  2. Runs the standard (Longfellow, including the signature proof) and, in
+     the classical build only, zk-friendly benchmarks in Docker with
+     --cpus/--memory; results go to results/<stack>/local-<N>cpu-pq/.
+     Groth16 cannot prove the post-quantum credential.
+  3. Classical build: reruns the three zk-friendly prove benchmarks with
+     --cpus-full, to show how rapidsnark scales with cores
+     (results/zk-friendly/local-<M>cpu/).
   4. Runs the revocation CFT experiments natively (results/revocation/local-pq/),
-     plus the MPC sweep when MP_SPDZ_PATH is set.
+     plus, when MP_SPDZ_PATH is set, the MPC: the plaintext-equivalence sweep
+     (classical) or the Module-LWE decryption (revocation_lwe_mpc, pq).
   5. Writes environment.json next to each result set, then runs tools/plot.py.
 
 By default everything is built with the pq Cargo feature (SHAKE256, ML-DSA-65)
@@ -21,7 +24,7 @@ Poseidon, EdDSA) and writes to the folders without the suffix.
   python3 tools/benchmark.py                      # everything (3.5 h on 2 CPUs
                                                   # before the pq credential
                                                   # benchmarks were added)
-  python3 tools/benchmark.py --only zk-friendly --skip-build
+  python3 tools/benchmark.py --classical --only zk-friendly --skip-build
   BENCH_N=3 python3 tools/benchmark.py            # BENCH_* and friends pass through
 
 Every binary writes <out>/summary.json (its --out contract); this script copies
@@ -153,7 +156,7 @@ def docker_suite(stack: str, benches: tuple[str, ...], limits: list[str], dest: 
     return {f"{tag}:{b}": codes[b] == 0 and (dest / f"{b}.json").is_file() for b in benches}
 
 
-def revocation_native(dest: Path, features: list[str]) -> dict[str, bool]:
+def revocation_native(dest: Path, features: list[str], classical: bool) -> dict[str, bool]:
     """CFT experiments on the host; the CSVs go straight to `dest`."""
     if run(["cargo", "build", "--release", "-p", "revocation", *features], cwd=ROOT) != 0:
         return {"revocation/local:build": False}
@@ -168,7 +171,13 @@ def revocation_native(dest: Path, features: list[str]) -> dict[str, bool]:
             [str(ROOT / "target/release/revocation_run_experiments"), "--out", str(dest)],
             stdout=log, stderr=subprocess.STDOUT) == 0
 
-    if os.environ.get("MP_SPDZ_PATH"):
+    if os.environ.get("MP_SPDZ_PATH") and not classical:
+        with open(logs / "revocation_local_lwe_mpc.log", "w") as log:
+            codes["revocation/local:mpc"] = run(
+                [str(ROOT / "target/release/revocation_lwe_mpc")],
+                env={**os.environ, "RESULTS_CSV": str(dest / "mpc_lwe_decrypt.csv")},
+                stdout=log, stderr=subprocess.STDOUT) == 0
+    elif os.environ.get("MP_SPDZ_PATH"):
         with tempfile.TemporaryDirectory(dir=WORK) as sweep:
             codes["revocation/local:mpc"] = run(
                 ["bash", str(ROOT / "crates/revocation/mpc/run_sweep.sh")],
@@ -232,7 +241,12 @@ def main() -> None:
     if not default_signature:
         suffix += f"-{args.algorithm}-{args.nist_level}"
 
-    stacks = args.only or list(STACKS)
+    # Groth16 proves the classical credential only.
+    pq_stacks = [s for s in STACKS if args.classical or s != "zk-friendly"]
+    if args.only and not set(args.only) <= set(pq_stacks):
+        sys.exit("zk-friendly runs in the classical build only (--classical): Groth16 "
+                 "cannot prove the post-quantum credential")
+    stacks = args.only or pq_stacks
     results = args.results.resolve()
     docker_stacks = [s for s in stacks if s != "revocation"]
 
@@ -262,7 +276,7 @@ def main() -> None:
         runs.append((dest, docker_suite("zk-friendly", PROVE_BENCHES, full, dest)))
     if "revocation" in stacks:
         dest = results / "revocation" / f"local{suffix}"
-        runs.append((dest, revocation_native(dest, features)))
+        runs.append((dest, revocation_native(dest, features, args.classical)))
 
     finished = datetime.now(timezone.utc)
     host = host_description()

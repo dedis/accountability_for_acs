@@ -9,15 +9,22 @@
 // verification of the serialized proof, timed as verify_ns. The
 // credential, the keys and the circuits are made once (issuance).
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <memory>
+#include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
+#include "algebra/fp24_ext.h"
+#include "circuits/logic/evaluation_backend.h"
+#include "circuits/logic/logic.h"
 #include "circuits/tests/pq/credential/credential.h"
 #include "circuits/tests/pq/credential/lwe.h"
 #include "circuits/tests/pq/credential/ml_dsa_cred.h"
@@ -25,6 +32,7 @@
 #include "circuits/tests/pq/credential/slh_dsa_cred.h"
 #include "circuits/tests/pq/ml_dsa/ml_dsa_ref.h"
 #include "circuits/tests/pq/ml_dsa/ml_dsa_shared.h"
+#include "circuits/tests/sha3/sha3_reference.h"
 #include "random/secure_random_engine.h"
 #include "random/transcript.h"
 #include "util/crypto.h"
@@ -81,22 +89,22 @@ class MlDsaHarness {
     show_.issuer_pk = issuer_.pk();
     show_.now = ts.now;
     show_.max_birth = ts.max_birth;
+    rng_.bytes(show_.verifier.data(), 32);
   }
 
-  // A new presentation: the nonce or the C4 tag, signed, and the CFT
-  // encryption.
+  // A new presentation: the nonce, or a new request ID and R2 with C4 on
+  // SHAKE256(event_tag || R2), and the CFT encryption.
   void Refresh() {
     if (kCft) {
-      rng_.bytes(show_.t.data(), 32);
+      rng_.bytes(show_.rid.data(), 32);
       rng_.bytes(sec_.r2.data(), 32);
-      std::vector<uint8_t> tr(show_.t.begin(), show_.t.end());
-      tr.insert(tr.end(), sec_.r2.begin(), sec_.r2.end());
-      show_.c4 = user_.sign(shake256(tr, kHashDigestSize));
-      sec_.user_sig = show_.c4;
+      sec_.user_sig = user_.sign(c4_message(
+          event_tag(show_.now, show_.rid, show_.verifier), sec_.r2));
       std::array<uint8_t, kLweMsgBytes> m;
       std::copy(id_.begin(), id_.end(), m.begin());
       std::copy(sec_.r2.begin(), sec_.r2.end(), m.begin() + kIdBytes);
       show_.ct = Lwe<LP>::encrypt(lwe_pub_, m, rng_, sec_.rnd);
+      show_.h = cft_binding(id_, sec_.r2);
     } else {
       rng_.bytes(show_.nonce.data(), 32);
       sec_.user_sig = user_.sign(
@@ -108,13 +116,55 @@ class MlDsaHarness {
     Refresh();
     return cred_->Prove(show_, sec_);
   }
+  // Cheating provers, with CFT.
+  //
+  // The ciphertext and the LWE witness encrypt another message than the
+  // ID || R2 of the sponge. Every circuit holds and only the links between
+  // the parts break, which the prover does not check: it proves, and Verify
+  // must fail.
+  bool ProveAnotherMessage() {
+    Refresh();
+    std::array<uint8_t, kLweMsgBytes> m;
+    rng_.bytes(m.data(), m.size());
+    show_.ct = Lwe<LP>::encrypt(lwe_pub_, m, rng_, sec_.rnd);
+    sec_.lwe_message_override = m;
+    const bool proved = cred_->Prove(show_, sec_);
+    sec_.lwe_message_override.reset();
+    return proved;
+  }
+  // C4 under another key (the issuer's), with its own ID in the CFT and H.
+  // The credential digest keeps the holder's ID values, so the issuer
+  // signature holds; every circuit holds and only the links from the ID
+  // attributes to the hash of the C4 key break: it proves, and Verify must
+  // fail.
+  bool ProveForeignC4() {
+    Refresh();
+    const std::vector<uint8_t> user_pk = sec_.user_pk;
+    sec_.user_pk = issuer_.pk();
+    const auto id = shake256(sec_.user_pk, kIdBytes);
+    sec_.user_sig = issuer_.sign(c4_message(
+        event_tag(show_.now, show_.rid, show_.verifier), sec_.r2));
+    std::array<uint8_t, kLweMsgBytes> m;
+    std::copy(id.begin(), id.end(), m.begin());
+    std::copy(sec_.r2.begin(), sec_.r2.end(), m.begin() + kIdBytes);
+    show_.ct = Lwe<LP>::encrypt(lwe_pub_, m, rng_, sec_.rnd);
+    show_.h = cft_binding(id, sec_.r2);
+    sec_.id_values_from_credential = true;
+    const bool proved = cred_->Prove(show_, sec_);
+    sec_.id_values_from_credential = false;
+    sec_.user_pk = user_pk;
+    return proved;
+  }
   bool Verify() const { return cred_->Verify(show_); }
   size_t ProofBytes() const { return cred_->ProofBytes(); }
   const Cred& cred() const { return *cred_; }
   typename Cred::Show& show() { return show_; }
   typename Cred::Secret& secret() { return sec_; }
-  const LweSecret<LP>& lwe_secret() const { return lwe_sec_; }
   const std::vector<uint8_t>& id() const { return id_; }
+  // The authorities' decryption of the CFT, with the joint key.
+  std::array<uint8_t, kLweMsgBytes> Open() const {
+    return Lwe<LP>::decrypt(lwe_sec_, show_.ct);
+  }
 
  private:
   SecureRandomEngine rng_;
@@ -148,21 +198,20 @@ class SlhHarness {
     show_.issuer_pk = issuer_.pk();
     show_.now = ts.now;
     show_.max_birth = ts.max_birth;
+    rng_.bytes(show_.verifier.data(), 32);
   }
 
   void Refresh() {
     if (kCft) {
-      rng_.bytes(show_.t.data(), 32);
+      rng_.bytes(show_.rid.data(), 32);
       rng_.bytes(sec_.r2.data(), 32);
-      rng_.bytes(sec_.salt.data(), sec_.salt.size());
-      std::vector<uint8_t> tr(show_.t.begin(), show_.t.end());
-      tr.insert(tr.end(), sec_.r2.begin(), sec_.r2.end());
-      show_.c4 = user_.sign(shake256(tr, kHashDigestSize));
+      sec_.user_sig = user_.sign(c4_message(
+          event_tag(show_.now, show_.rid, show_.verifier), sec_.r2));
       std::array<uint8_t, kLweMsgBytes> m;
       std::copy(id_.begin(), id_.end(), m.begin());
       std::copy(sec_.r2.begin(), sec_.r2.end(), m.begin() + kIdBytes);
       show_.ct = Lwe<LP>::encrypt(lwe_pub_, m, rng_, sec_.rnd);
-      show_.h = Cred::binding(id_, sec_.r2, sec_.salt);
+      show_.h = cft_binding(id_, sec_.r2);
     } else {
       rng_.bytes(show_.nonce.data(), 32);
       sec_.user_sig = user_.sign(
@@ -174,10 +223,54 @@ class SlhHarness {
     Refresh();
     return cred_->Prove(show_, sec_);
   }
+  // Cheating provers, with CFT.
+  //
+  // The ciphertext and the LWE witness encrypt another message than the
+  // ID || R2 of the sponge. Every circuit holds and only the links between
+  // the parts break, which the prover does not check: it proves, and Verify
+  // must fail.
+  bool ProveAnotherMessage() {
+    Refresh();
+    std::array<uint8_t, kLweMsgBytes> m;
+    rng_.bytes(m.data(), m.size());
+    show_.ct = Lwe<LP>::encrypt(lwe_pub_, m, rng_, sec_.rnd);
+    sec_.lwe_message_override = m;
+    const bool proved = cred_->Prove(show_, sec_);
+    sec_.lwe_message_override.reset();
+    return proved;
+  }
+  // C4 under another key (the issuer's), with its own ID in the CFT and H.
+  // The credential digest keeps the holder's ID values, so the issuer
+  // signature holds; every circuit holds and only the links from the ID
+  // attributes to the hash of the C4 key break: it proves, and Verify must
+  // fail.
+  bool ProveForeignC4() {
+    Refresh();
+    const std::vector<uint8_t> user_pk = sec_.user_pk;
+    sec_.user_pk = issuer_.pk();
+    const auto id = shake256(sec_.user_pk, kIdBytes);
+    sec_.user_sig = issuer_.sign(c4_message(
+        event_tag(show_.now, show_.rid, show_.verifier), sec_.r2));
+    std::array<uint8_t, kLweMsgBytes> m;
+    std::copy(id.begin(), id.end(), m.begin());
+    std::copy(sec_.r2.begin(), sec_.r2.end(), m.begin() + kIdBytes);
+    show_.ct = Lwe<LP>::encrypt(lwe_pub_, m, rng_, sec_.rnd);
+    show_.h = cft_binding(id, sec_.r2);
+    sec_.id_values_from_credential = true;
+    const bool proved = cred_->Prove(show_, sec_);
+    sec_.id_values_from_credential = false;
+    sec_.user_pk = user_pk;
+    return proved;
+  }
   bool Verify() const { return cred_->Verify(show_); }
   size_t ProofBytes() const { return cred_->ProofBytes(); }
   typename Cred::Show& show() { return show_; }
   typename Cred::Secret& secret() { return sec_; }
+  const std::vector<uint8_t>& id() const { return id_; }
+  // The authorities' decryption of the CFT, with the joint key.
+  std::array<uint8_t, kLweMsgBytes> Open() const {
+    return Lwe<LP>::decrypt(lwe_sec_, show_.ct);
+  }
 
  private:
   SecureRandomEngine rng_;
@@ -211,6 +304,136 @@ TEST(Lwe, DecryptsTheMessage) {
   LweRandomness<LP> rnd;
   const auto ct = Lwe<LP>::encrypt(pub, m, rng, rnd);
   EXPECT_EQ(Lwe<LP>::decrypt(sec, ct), m);
+}
+
+// SHAKE128(0x4b^32 || LABEL), N bytes: the inputs of the known answer of
+// crates/pqc/src/lwe.rs (matches_the_known_answer).
+std::vector<uint8_t> KatBytes(std::vector<uint8_t> label, size_t n) {
+  std::vector<uint8_t> in(32, 0x4b);
+  in.insert(in.end(), label.begin(), label.end());
+  std::vector<uint8_t> out(n);
+  Sha3Reference::shake128Hash(in.data(), in.size(), out.data(), n);
+  return out;
+}
+
+// N small coefficients: byte b gives b % (2 eta + 1) - eta, modulo q.
+template <class LP>
+std::vector<uint32_t> KatSmall(std::vector<uint8_t> label, size_t n) {
+  std::vector<uint32_t> c;
+  for (uint8_t b : KatBytes(std::move(label), n)) {
+    c.push_back((b % (2 * LP::eta + 1) + ml_dsa::Q - LP::eta) % ml_dsa::Q);
+  }
+  return c;
+}
+
+// The Rust implementation (crates/pqc/src/lwe.rs) and this reference give
+// the same ciphertext for the same inputs, and the encryption circuit
+// accepts it. testdata/lwe_kat_<category>.txt holds the Rust U and V.
+TEST(Lwe, MatchesTheRustKnownAnswer) {
+  using LP = std::conditional_t<kCategory5, LweCategory5, LweCategory3>;
+  constexpr size_t K = LP::K, N = ml_dsa::N, Q = ml_dsa::Q;
+  const std::array<uint8_t, 32> seed = [] {
+    std::array<uint8_t, 32> s;
+    s.fill(0x4b);
+    return s;
+  }();
+
+  // The joint secret and error: the sums of the three authorities' ones.
+  LweSecret<LP> sec{};
+  std::array<std::array<Poly, K>, kLweSlots> e{};
+  for (uint8_t i = 0; i < 3; ++i) {
+    const auto s_i = KatSmall<LP>({'s', i}, kLweSlots * K * N);
+    const auto e_i = KatSmall<LP>({'e', i}, kLweSlots * K * N);
+    for (size_t x = 0; x < kLweSlots * K * N; ++x) {
+      uint32_t& sx = sec.s[x / (K * N)][x / N % K][x % N];
+      uint32_t& ex = e[x / (K * N)][x / N % K][x % N];
+      sx = (sx + s_i[x]) % Q;
+      ex = (ex + e_i[x]) % Q;
+    }
+  }
+  LwePublic<LP> pub;
+  Lwe<LP>::keygen(seed, sec, e, pub);
+
+  std::array<uint8_t, kLweMsgBytes> m;
+  const auto mb = KatBytes({'m'}, kLweMsgBytes);
+  std::copy(mb.begin(), mb.end(), m.begin());
+  LweRandomness<LP> rnd;
+  const auto r = KatSmall<LP>({'r'}, K * N), e1 = KatSmall<LP>({'e', '1'}, K * N),
+             e2 = KatSmall<LP>({'e', '2'}, kLweSlots * N);
+  for (size_t x = 0; x < K * N; ++x) {
+    rnd.r[x / N][x % N] = r[x];
+    rnd.e1[x / N][x % N] = e1[x];
+  }
+  for (size_t x = 0; x < kLweSlots * N; ++x) rnd.e2[x / N][x % N] = e2[x];
+  const LweCiphertext<LP> ct = Lwe<LP>::encrypt(pub, m, rnd);
+
+  const std::string path = std::string(PQ_CRED_TESTDATA) + "/lwe_kat_" +
+                           (kCategory5 ? "5" : "3") + ".txt";
+  std::ifstream kat(path);
+  ASSERT_TRUE(kat) << path;
+  std::string name;
+  uint32_t x;
+  ASSERT_TRUE(kat >> name && name == "u") << path;
+  for (size_t i = 0; i < K * N; ++i) {
+    ASSERT_TRUE(kat >> x) << path;
+    EXPECT_EQ(ct.u[i / N][i % N], x) << "U coefficient " << i;
+  }
+  ASSERT_TRUE(kat >> name && name == "v") << path;
+  for (size_t i = 0; i < kLweSlots * N; ++i) {
+    ASSERT_TRUE(kat >> x) << path;
+    EXPECT_EQ(ct.v[i / N][i % N], x) << "V coefficient " << i;
+  }
+  // The commitments follow; lwe.h has none.
+  ASSERT_TRUE(kat >> name && name == "commitments") << path;
+  EXPECT_EQ(Lwe<LP>::decrypt(sec, ct), m);
+
+  // The encryption circuit, evaluated on the ciphertext and the randomness.
+  using Field = Fp24Ext<12>;
+  using Backend = EvaluationBackend<Field>;
+  using Lwec = LweCircuit<Logic<Field, Backend>, LP>;
+  const Field f(ml_dsa::Fq(), 7);
+  const Backend backend(f, /*panic_on_assertion_failure=*/false);
+  const Logic<Field, Backend> lc(&backend, f);
+  const auto elt = [&](uint32_t v) { return lc.konst(f.of_scalar(v)); };
+  typename Lwec::Public u;
+  typename Lwec::Private w;
+  for (size_t i = 0; i < K * N; ++i) {
+    u.u[i / N][i % N] = elt(ct.u[i / N][i % N]);
+    w.r[i / N][i % N] = elt(rnd.r[i / N][i % N]);
+    w.e1[i / N][i % N] = elt(rnd.e1[i / N][i % N]);
+  }
+  for (size_t i = 0; i < kLweSlots * N; ++i) {
+    u.v[i / N][i % N] = elt(ct.v[i / N][i % N]);
+    w.e2[i / N][i % N] = elt(rnd.e2[i / N][i % N]);
+  }
+  for (size_t b = 0; b < 8 * kLweMsgBytes; ++b) {
+    w.m[b] = lc.bit((m[b / 8] >> (b % 8)) & 1);
+  }
+  const Lwec circuit(lc, pub);
+  circuit.assert_encryption(u, w);
+  EXPECT_FALSE(backend.assertion_failed());
+  u.v[0][0] = elt((ct.v[0][0] + 1) % Q);
+  circuit.assert_encryption(u, w);
+  EXPECT_TRUE(backend.assertion_failed());
+}
+
+// The vector of event_tag_matches_the_vector (crates/pqc/src/shake.rs), from
+// Python's hashlib.shake_256.
+TEST(EventTag, MatchesTheVector) {
+  std::array<uint8_t, 32> rid, verifier;
+  rid.fill(1);
+  verifier.fill(2);
+  const std::string want =
+      "6ec7fb42c33190e4fa743e81aba1349dc5a787ac42d1885aa7220bea8e222dd9"
+      "0836a8c10a2fd01c8b8b2d8037384413"
+      "5f25dc356c2b29d64bc25d42547e3fc5";
+  std::string got;
+  for (uint8_t b : event_tag(1, rid, verifier)) {
+    const char* hex = "0123456789abcdef";
+    got += hex[b >> 4];
+    got += hex[b & 15];
+  }
+  EXPECT_EQ(got, want.substr(0, 2 * kHashDigestSize));
 }
 
 TEST(RejPoly, MatchesReference) {
@@ -247,7 +470,51 @@ void ProveVerifyAndReject() {
   h.show().issuer_pk[5] ^= 1;
   EXPECT_FALSE(h.Verify());
   h.show() = show;
+  // A NOW or MAX_BIRTH wider than the age circuit compares: their low bits
+  // are valid.
+  h.show().now += uint64_t(1) << kTsBits;
+  EXPECT_FALSE(h.Verify());
+  h.show() = show;
+  h.show().max_birth += uint64_t(1) << kTsBits;
+  EXPECT_FALSE(h.Verify());
+  h.show() = show;
   EXPECT_TRUE(h.Verify());
+}
+
+// With CFT: the authorities decrypt the holder's ID || R2, which matches the
+// binding H; a changed H fails; a proof of another message, or of C4 under
+// another key, does not verify.
+template <class H>
+void ExpectOpeningMatchesTheBinding(H& h) {
+  const auto m = h.Open();
+  const std::vector<uint8_t> id(m.begin(), m.begin() + kIdBytes);
+  std::array<uint8_t, 32> r2;
+  std::copy(m.begin() + kIdBytes, m.end(), r2.begin());
+  EXPECT_EQ(id, h.id());
+  EXPECT_EQ(cft_binding(id, r2), h.show().h);
+  const auto show = h.show();
+  h.show().h[0] ^= 1;
+  EXPECT_FALSE(h.Verify());
+  h.show() = show;
+  ASSERT_TRUE(h.ProveAnotherMessage());
+  EXPECT_FALSE(h.Verify());
+  ASSERT_TRUE(h.ProveForeignC4());
+  EXPECT_FALSE(h.Verify());
+}
+
+// C4 signs the event tag: a show does not verify for another request ID,
+// verifier or time. Leaves SHOW in H.
+template <class H, class Show>
+void ExpectBoundToTheRequest(H& h, const Show& show) {
+  h.show().rid[0] ^= 1;
+  EXPECT_FALSE(h.Verify());
+  h.show() = show;
+  h.show().verifier[31] ^= 1;
+  EXPECT_FALSE(h.Verify());
+  h.show() = show;
+  h.show().now -= 1;
+  EXPECT_FALSE(h.Verify());
+  h.show() = show;
 }
 
 TEST(MlDsaCredential, NoCftProvesAndRejects) {
@@ -260,16 +527,14 @@ TEST(MlDsaCredential, CftProvesAndRejects) {
   set_log_level(ERROR);
   H h;
   ASSERT_TRUE(h.Prove());
-  // The authorities decrypt ID || R2.
-  const auto m = Lwe<typename MlDsaCredential<MlDsaP, true>::LP>::decrypt(
-      h.lwe_secret(), h.show().ct);
-  EXPECT_TRUE(std::equal(h.id().begin(), h.id().end(), m.begin()));
   const auto show = h.show();
   h.show().ct.v[0][0] = (h.show().ct.v[0][0] + 1) % ml_dsa::Q;
   EXPECT_FALSE(h.Verify());
-  h.show() = show;
-  h.show().t[0] ^= 1;
+  h.show().ct.v[0][0] = ml_dsa::Q;
   EXPECT_FALSE(h.Verify());
+  h.show() = show;
+  ExpectBoundToTheRequest(h, show);
+  ExpectOpeningMatchesTheBinding(h);
 }
 
 TEST(SlhDsaCredential, NoCftProvesAndRejects) {
@@ -283,9 +548,7 @@ TEST(SlhDsaCredential, CftProvesAndRejects) {
   H h;
   ASSERT_TRUE(h.Prove());
   const auto show = h.show();
-  h.show().c4[10] ^= 1;
-  EXPECT_FALSE(h.Verify());
-  h.show() = show;
+  ExpectBoundToTheRequest(h, show);
   h.show().h[0] ^= 1;
   EXPECT_FALSE(h.Verify());
   h.show() = show;
@@ -293,6 +556,7 @@ TEST(SlhDsaCredential, CftProvesAndRejects) {
   EXPECT_FALSE(h.Verify());
   h.show() = show;
   EXPECT_TRUE(h.Verify());
+  ExpectOpeningMatchesTheBinding(h);
 }
 
 template <class P>

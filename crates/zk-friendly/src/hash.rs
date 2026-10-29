@@ -1,4 +1,5 @@
-//! Hashing helpers that are not Poseidon.
+//! Hashing helpers of the classical credential that are not Poseidon. The
+//! post-quantum credential (`pq` module) hashes with SHAKE256 only.
 
 use ark_ff::PrimeField;
 
@@ -7,23 +8,10 @@ use babyjub::curve::Fq;
 /// `sha256(message) mod p`, the JS `sha256Utf8ToField`.
 ///
 /// The digest is read big-endian, as `bytesToBigIntBE` did.
-#[cfg(not(feature = "pq"))]
 pub fn utf8_to_field(message: &str) -> Fq {
     use sha2::{Digest, Sha256};
 
     Fq::from_be_bytes_mod_order(&Sha256::digest(message.as_bytes()))
-}
-
-/// `shake256(message, 48 bytes) mod p`, the output read big-endian.
-#[cfg(feature = "pq")]
-pub fn utf8_to_field(message: &str) -> Fq {
-    use sha3::digest::{ExtendableOutput, Update, XofReader};
-
-    let mut shake = sha3::Shake256::default();
-    shake.update(message.as_bytes());
-    let mut out = [0u8; 48];
-    shake.finalize_xof().read(&mut out);
-    Fq::from_be_bytes_mod_order(&out)
 }
 
 #[cfg(test)]
@@ -32,7 +20,6 @@ mod tests {
 
     /// Reference values produced with Node's `crypto` module and the JS
     /// `sha256Utf8ToField(label, poseidon.F.p)`.
-    #[cfg(not(feature = "pq"))]
     #[test]
     fn matches_the_js_helper() {
         assert_eq!(
@@ -46,25 +33,6 @@ mod tests {
         assert_eq!(
             utf8_to_field("revocationIndex").to_string(),
             "556636330850170629258383134745417724444263682277322717598551509432075897268"
-        );
-    }
-
-    /// Reference values from Python:
-    /// `int.from_bytes(hashlib.shake_256(label.encode()).digest(48), "big") % p`.
-    #[cfg(feature = "pq")]
-    #[test]
-    fn matches_python_shake256() {
-        assert_eq!(
-            utf8_to_field("birthDate").to_string(),
-            "11807514439683247212017283394335837208753695072419100719280613540195876246484"
-        );
-        assert_eq!(
-            utf8_to_field("IDx").to_string(),
-            "7018447549559151877109865022700913166771138480930577080601927634637682476136"
-        );
-        assert_eq!(
-            utf8_to_field("revocationIndex").to_string(),
-            "21285170661508533374966116464893546470871927511869494647984467112494228072"
         );
     }
 }

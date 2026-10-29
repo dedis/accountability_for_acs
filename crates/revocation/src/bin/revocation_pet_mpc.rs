@@ -6,12 +6,14 @@
 //! - MP-SPDZ decides, per row, whether the CFT recurs at least `tau` times
 //! - Integrity check `H(ID, t, sk·C2) == C4` (`H`: [`revocation::hash`]), then
 //!   reveal
+//!
+//! Classical build only: the post-quantum build stops with an error.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::{Context as _, Result};
+use anyhow::{ensure, Context as _, Result};
 use ark_ec::CurveGroup;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -190,11 +192,12 @@ fn partial_decrypt(blinded: &Triangle, sk: Fr) -> Triangle {
     }
 }
 
-/// `Player-Data/Input-P0-0` holds `M'.x` and `M'.y` for each `i < j` pair.
+/// The MPC inputs, one per party: party 0 gives `M'.x` and `M'.y` for each
+/// `i < j` pair; the others give nothing.
 ///
 /// The whole triangle is normalised to affine in one batch (one field
 /// inversion) instead of one inversion per point.
-fn write_mpc_inputs(spdz_path: &std::path::Path, m_prime: &Triangle) -> Result<()> {
+fn mpc_inputs(m_prime: &Triangle) -> Vec<String> {
     let n = m_prime.n;
     let affine = Point::normalize_batch(&m_prime.values);
     let mut lines = Vec::with_capacity(2 * n_pairs(n as u64) as usize);
@@ -206,13 +209,14 @@ fn write_mpc_inputs(spdz_path: &std::path::Path, m_prime: &Triangle) -> Result<(
         }
     }
 
-    mpc_runner::write_player_inputs(spdz_path, &lines, PARTIES)?;
-    println!("wrote inputs for {n} CFTs / {} pairs:", n_pairs(n as u64));
     println!(
-        "  Input-P0-0: {} lines (2 per pair: M'.x, M'.y)",
+        "inputs for {n} CFTs / {} pairs: party 0 gives {} values (M'.x, M'.y per pair)",
+        n_pairs(n as u64),
         lines.len()
     );
-    Ok(())
+    let mut inputs = vec![String::new(); PARTIES];
+    inputs[0] = lines.join("\n");
+    inputs
 }
 
 /// Threshold-opens one CFT and re-checks its Poseidon binding.
@@ -270,7 +274,7 @@ fn run_once(scenario: &Scenario<'_>, rng: &mut StdRng) -> Result<()> {
     drop(judge);
     drop(ngo);
 
-    write_mpc_inputs(spdz_path, &blinded_c3)?;
+    let inputs = mpc_inputs(&blinded_c3);
     drop(blinded_c3);
 
     let full_name = mpc_runner::compile(
@@ -281,10 +285,17 @@ fn run_once(scenario: &Scenario<'_>, rng: &mut StdRng) -> Result<()> {
     )?;
 
     let mpc_start = Instant::now();
-    let output = mpc_runner::run(spdz_path, &full_name, PARTIES)?;
+    let output = mpc_runner::run(spdz_path, &full_name, inputs)?;
     let mpc_wall_ms = mpc_start.elapsed().as_secs_f64() * 1e3;
 
+    // Every party prints the predicates; all must agree.
     let predicates = mpc_runner::parse_predicates(&output.stdout[0], num_cfts)?;
+    for (party, out) in output.stdout.iter().enumerate().skip(1) {
+        ensure!(
+            mpc_runner::parse_predicates(out, num_cfts)? == predicates,
+            "party {party} printed other predicates than party 0"
+        );
+    }
     let flagged = predicates.iter().filter(|p| **p).count();
     println!("# CFTs flagged: {flagged}");
 
@@ -372,6 +383,12 @@ fn parse_sizes() -> Result<Vec<usize>> {
 }
 
 fn main() -> Result<()> {
+    anyhow::ensure!(
+        !cfg!(feature = "pq"),
+        "the plaintext-equivalence test needs the ElGamal CFT, which the post-quantum \
+         build replaces with Module-LWE; build without the pq \
+         feature (cargo build-classical)"
+    );
     let sizes = parse_sizes()?;
     let iterations = env::usize_or("CFT_BENCH_ITERS", 1)?;
     let tau = env::usize_or("CFT_MIN_PID_COUNT", 2)?;

@@ -63,13 +63,19 @@ impl Gbench {
     }
 
     /// The binary with `PQ_CIRCUIT_CACHE` (default: `pq-circuits` in the
-    /// temporary directory), so that the post-quantum proofs compile their
-    /// circuits in the warm-up and load them in the measured run
-    /// (`third_party/longfellow-zk*/lib/circuits/tests/pq/circuit_cache.h`).
+    /// stack's `.work` directory, not the shared temporary directory: a
+    /// cached circuit is trusted), so that the post-quantum proofs compile
+    /// their circuits in the warm-up and load them in the measured run
+    /// (`third_party/longfellow-zk/lib/circuits/tests/pq/circuit_cache.h`,
+    /// which creates the directory with mode 0700 and refuses one others can
+    /// write).
     fn command(&self) -> Command {
         let mut cmd = Command::new(&self.bin);
         if std::env::var_os(CIRCUIT_CACHE).is_none() {
-            cmd.env(CIRCUIT_CACHE, std::env::temp_dir().join("pq-circuits"));
+            cmd.env(
+                CIRCUIT_CACHE,
+                bench_core::paths::work(paths::STACK).join("pq-circuits"),
+            );
         }
         cmd
     }

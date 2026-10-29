@@ -1,4 +1,6 @@
-//! CFT batch construction and the two revocation strategies under measurement.
+//! The classical CFT (ElGamal over Baby Jubjub): batch construction and the
+//! two revocation strategies under measurement. The post-quantum CFT is
+//! [`crate::lwe_cft`].
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -95,14 +97,16 @@ pub fn build_batch<S: Scheme, R: Rng + ?Sized>(
     let n_unique = n - n_recurring;
 
     // User 0 is the recurring identity; users 1..=n_unique occur once.
-    let users = par_map(n_unique + 1, rng, |_, rng, _| scheme.keygen(rng))?;
+    let users = par_map(n_unique + 1, rng, Poseidon::new, |_, rng, _| {
+        scheme.keygen(rng)
+    })?;
 
     let mut slots: Vec<usize> = Vec::with_capacity(n);
     slots.extend(std::iter::repeat_n(0, n_recurring));
     slots.extend(1..=n_unique);
     slots.shuffle(rng);
 
-    let cfts = par_map(n, rng, |i, rng, poseidon| {
+    let cfts = par_map(n, rng, Poseidon::new, |i, rng, poseidon| {
         let (id_u, user_sk) = &users[slots[i]];
         let r1 = rand_scalar(rng);
         let r2 = rand_scalar(rng);
@@ -129,12 +133,13 @@ pub fn build_batch<S: Scheme, R: Rng + ?Sized>(
 /// Computes `f(i)` for `i` in `0..len` on all available cores and returns the
 /// results in index order. Workers take the next index from a shared counter,
 /// so slower cores take fewer items. Each worker has its own RNG, seeded from
-/// `rng`, and its own [`Poseidon`], which is not `Sync`.
-fn par_map<T, R, F>(len: usize, rng: &mut R, f: F) -> Result<Vec<T>>
+/// `rng`, and its own state from `init` (a [`Poseidon`], which is not `Sync`).
+pub(crate) fn par_map<T, S, R, I, F>(len: usize, rng: &mut R, init: I, f: F) -> Result<Vec<T>>
 where
     T: Send,
     R: Rng + ?Sized,
-    F: Fn(usize, &mut StdRng, &Poseidon) -> Result<T> + Sync,
+    I: Fn() -> S + Sync,
+    F: Fn(usize, &mut StdRng, &S) -> Result<T> + Sync,
 {
     let workers = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
@@ -147,16 +152,16 @@ where
         let handles: Vec<_> = rngs
             .into_iter()
             .map(|mut rng| {
-                let (f, next) = (&f, &next);
+                let (init, f, next) = (&init, &f, &next);
                 scope.spawn(move || -> Result<Vec<(usize, T)>> {
-                    let poseidon = Poseidon::new();
+                    let state = init();
                     let mut done = Vec::new();
                     for _ in 0..len {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         if i >= len {
                             break;
                         }
-                        done.push((i, f(i, &mut rng, &poseidon)?));
+                        done.push((i, f(i, &mut rng, &state)?));
                     }
                     Ok(done)
                 })
@@ -402,14 +407,6 @@ mod tests {
     #[test]
     fn both_strategies_open_a_batch() {
         open_batch(&EdDsa, 40, &[0.1, 0.5]);
-    }
-
-    /// The post-quantum C4 of the build. The batch is small (2 recurring and
-    /// 2 unique CFTs): SLH-DSA-SHAKE-192s and -256s sign in about 1.1 s.
-    #[cfg(feature = "pq")]
-    #[test]
-    fn both_strategies_open_a_post_quantum_batch() {
-        open_batch(&c4::Selected::default(), 4, &[0.5]);
     }
 
     #[test]

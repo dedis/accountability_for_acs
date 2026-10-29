@@ -70,8 +70,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY .work/downloads/ ./.work/downloads/
 
-# CARGO_FEATURES: empty for the default post-quantum (pq) build;
-# --build-arg CARGO_FEATURES=--no-default-features builds the classical one.
+# CARGO_FEATURES: --no-default-features for the classical build, which the
+# Circom/Groth16 benchmarks need (tools/benchmark.py --classical). Empty
+# builds and tests the post-quantum credential model; the benchmarks then
+# stop with an error.
 ARG CARGO_FEATURES=""
 RUN test -f .work/downloads/ppot_0080_19.ptau \
  && test -d .work/downloads/circomlib/circuits \

@@ -5,16 +5,18 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::c4;
-use crate::cft::{self, Keys, Timing};
+use crate::cft::Timing;
 use crate::csv;
 use crate::env;
 use crate::paths::with_suffix;
 use crate::stats::{self, Sample};
+#[cfg(not(feature = "pq"))]
+use crate::{c4, cft};
+#[cfg(not(feature = "pq"))]
 use babyjub::poseidon::Poseidon;
 
 const DEFAULT_SIZES: [usize; 9] = [10, 20, 50, 100, 500, 1000, 2000, 4000, 8000];
@@ -74,7 +76,12 @@ pub enum Benchmark {
 }
 
 impl Benchmark {
-    pub const ALL: [Self; 2] = [Self::DirectDecrypt, Self::LinkDecrypt];
+    /// The benchmarks of the build: link-then-decrypt needs the ElGamal CFT,
+    /// so the post-quantum build has direct decrypt only.
+    #[cfg(not(feature = "pq"))]
+    pub const ALL: &[Self] = &[Self::DirectDecrypt, Self::LinkDecrypt];
+    #[cfg(feature = "pq")]
+    pub const ALL: &[Self] = &[Self::DirectDecrypt];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -111,31 +118,43 @@ impl FromStr for Benchmark {
     }
 }
 
-/// Crypto material and randomness shared by every scenario.
+/// The C4 signature of the build.
+#[cfg(not(feature = "pq"))]
+pub const C4_NAME: &str = c4::SELECTED_NAME;
+/// The C4 signature of the build.
+#[cfg(feature = "pq")]
+pub const C4_NAME: &str = crate::lwe_cft::C4_NAME;
+
+/// Crypto material and randomness shared by every scenario: the ElGamal keys
+/// of the three authorities, or their Module-LWE key shares under `pq`.
 ///
 /// Building it is the expensive part of a run, so `run_experiments` reuses one
 /// context across both benchmarks, as the JS `initBenchContext()` did.
 pub struct Context {
+    #[cfg(not(feature = "pq"))]
     pub poseidon: Poseidon,
-    pub keys: Keys,
+    #[cfg(not(feature = "pq"))]
+    pub keys: cft::Keys,
+    #[cfg(feature = "pq")]
+    pub authorities: crate::lwe_cft::Authorities,
     pub rng: StdRng,
 }
 
 impl Context {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         let mut rng = StdRng::from_entropy();
-        let keys = Keys::generate(&mut rng);
-        Self {
+        #[cfg(not(feature = "pq"))]
+        let context = Self {
             poseidon: Poseidon::new(),
-            keys,
+            keys: cft::Keys::generate(&mut rng),
             rng,
-        }
-    }
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
+        };
+        #[cfg(feature = "pq")]
+        let context = Self {
+            authorities: crate::lwe_cft::Authorities::generate(&mut rng)?,
+            rng,
+        };
+        Ok(context)
     }
 }
 
@@ -255,28 +274,43 @@ fn run_scenario(
     run: usize,
 ) -> Result<Row> {
     // A fresh scheme per batch: a post-quantum C4 keeps a registry of keys.
-    let scheme = c4::Selected::default();
-    let batch = cft::build_batch(
-        &scheme,
-        ctx.keys.pk_ag,
-        set_size,
-        recurring_pct,
-        &mut ctx.rng,
-    )?;
-
-    let timing = match benchmark {
-        Benchmark::DirectDecrypt => {
-            cft::bench_direct_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys)?
-        }
-        Benchmark::LinkDecrypt => {
-            cft::bench_link_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys, &mut ctx.rng)?
-        }
+    #[cfg(not(feature = "pq"))]
+    let (timing, pid_threshold, n_recurring) = {
+        let scheme = c4::Selected::default();
+        let batch = cft::build_batch(
+            &scheme,
+            ctx.keys.pk_ag,
+            set_size,
+            recurring_pct,
+            &mut ctx.rng,
+        )?;
+        let timing = match benchmark {
+            Benchmark::DirectDecrypt => {
+                cft::bench_direct_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys)?
+            }
+            Benchmark::LinkDecrypt => {
+                cft::bench_link_decrypt(&ctx.poseidon, &scheme, &batch, &ctx.keys, &mut ctx.rng)?
+            }
+        };
+        (timing, batch.pid_threshold, batch.n_recurring)
+    };
+    #[cfg(feature = "pq")]
+    let (timing, pid_threshold, n_recurring) = {
+        use crate::lwe_cft;
+        ensure!(benchmark == Benchmark::DirectDecrypt, LINK_NEEDS_ELGAMAL);
+        let batch = lwe_cft::build_batch::<lwe_cft::Selected, _>(
+            &ctx.authorities.pk,
+            set_size,
+            recurring_pct,
+            &mut ctx.rng,
+        )?;
+        let timing = lwe_cft::bench_direct_decrypt(&batch, &mut ctx.authorities)?;
+        (timing, batch.pid_threshold, batch.n_recurring)
     };
 
-    if benchmark == Benchmark::LinkDecrypt && timing.n_after_filter != batch.n_recurring {
+    if benchmark == Benchmark::LinkDecrypt && timing.n_after_filter != n_recurring {
         bail!(
-            "{benchmark} n={set_size} pct={recurring_pct} run={run}: expected {} after filter, got {}",
-            batch.n_recurring,
+            "{benchmark} n={set_size} pct={recurring_pct} run={run}: expected {n_recurring} after filter, got {}",
             timing.n_after_filter
         );
     }
@@ -285,18 +319,24 @@ fn run_scenario(
         set_size,
         recurring_pct: (recurring_pct * 100.0).round() as i64,
         run,
-        pid_threshold: batch.pid_threshold,
-        n_recurring_expected: batch.n_recurring,
+        pid_threshold,
+        n_recurring_expected: n_recurring,
         timing,
     })
 }
 
 /// Runs the whole grid and writes `*_runs.csv`, `*_summary.csv`, `*_fit.csv`.
+/// Why link-then-decrypt stops in the post-quantum build.
+pub const LINK_NEEDS_ELGAMAL: &str = "link-then-decrypt needs the ElGamal CFT, which the \
+     post-quantum build replaces with Module-LWE; build without \
+     the pq feature (cargo build-classical)";
+
 pub fn run(benchmark: Benchmark, ctx: &mut Context, options: &Options) -> Result<Outcome> {
+    ensure!(Benchmark::ALL.contains(&benchmark), LINK_NEEDS_ELGAMAL);
     let prefix = options.results_dir.join(benchmark.as_str());
 
     println!("CFT experiment: {benchmark}");
-    println!("  C4 signature: {}", c4::SELECTED_NAME);
+    println!("  C4 signature: {C4_NAME}");
     println!(
         "  sizes={} recurring%={} runs={}",
         options
@@ -457,7 +497,7 @@ mod tests {
 
     #[test]
     fn benchmark_names_roundtrip() {
-        for b in Benchmark::ALL {
+        for b in [Benchmark::DirectDecrypt, Benchmark::LinkDecrypt] {
             assert_eq!(b.as_str().parse::<Benchmark>().unwrap(), b);
         }
         assert!("mpc-decrypt".parse::<Benchmark>().is_err());

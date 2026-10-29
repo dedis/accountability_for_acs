@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/babyjub",
     "crates/bench-core",
+    "crates/pqc",
     "crates/revocation",
     "crates/standard",
     "crates/zk-friendly",
@@ -31,8 +32,10 @@ sha2 = "0.10"
 sha3 = "0.10"
 fips204 = "=0.4.6"
 fips205 = "=0.4.1"
+zeroize = "1"
 babyjub = { path = "crates/babyjub" }
 bench-core = { path = "crates/bench-core" }
+pqc = { path = "crates/pqc" }
 
 [profile.release]
 opt-level = 3

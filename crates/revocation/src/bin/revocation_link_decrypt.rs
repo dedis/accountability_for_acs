@@ -1,4 +1,5 @@
 //! Link CFTs to pseudonyms, keep the recurring ones, decrypt only those.
+//! Needs the ElGamal CFT: the post-quantum build stops with an error.
 
 use anyhow::Result;
 use bench_core::cli::Out;
@@ -18,6 +19,6 @@ fn main() -> Result<()> {
     let dir = Args::parse().out.out.unwrap_or_else(paths::experiments);
     let benchmark = Benchmark::LinkDecrypt;
     let options = Options::from_env(benchmark, dir)?;
-    experiment::run(benchmark, &mut Context::new(), &options)?;
+    experiment::run(benchmark, &mut Context::new()?, &options)?;
     Ok(())
 }
