@@ -51,7 +51,9 @@ has the soundness of its NIST category (192 bits at level 3, 256 bits at
 level 5). SLH-DSA needs 2.1 GB (192s), 4.5 GB (256s), 5.7 GB (192f) or
 8.9 GB (256f) of memory. Its summary also has the native signing time of
 the same scheme (`statsMs.sign`, `avgMs.sign`), measured with the C4 signer
-of `pqc` (fips204 / fips205) once per repetition.
+of `pqc` (fips204 / fips205) once per repetition. `standard_sign` times
+native signing of all six schemes in one build and prints JSON to stdout
+(`--repetitions`, default 10).
 
 ```bash
 cargo run --release --bin standard_prove_verify
@@ -60,6 +62,7 @@ cargo run --release --bin standard_prove_verify_revocation
 cargo run --release --bin standard_merkle_vs_flat
 cargo run --release --bin standard_communication_size
 cargo run --release --bin standard_signature           # pq feature
+cargo run --release --bin standard_sign                # pq feature
 ```
 
 Each writes `summary.json` to `--out DIR` (default
@@ -91,14 +94,13 @@ does nothing; quiet output is the default.
 | Path | Role |
 |------|------|
 | `src/` | Google Benchmark runner and report parsing, the shared presentation driver |
-| `src/bin/` | The six benchmarks (`standard_signature` needs the `pq` feature) |
+| `src/bin/` | The benchmarks (`standard_signature`, `standard_sign` and `standard_pq_*` need the `pq` feature) |
 | `measure/` | Proof-size programs (C++) and their build scripts, run by `standard_communication_size` |
 
 The merkle-vs-flat sweep needs more than 7 GB of memory at \(n = 64\).
 
-Longfellow's benchmark `main` returns the number of benchmarks it matched as its
-exit code, so a non-zero code after a successful run is expected; the drivers
-report it as a note.
+Longfellow's benchmark `main` (`lib/testing/test_main.cc`) exits with 1 when the
+filter matches no benchmark; the drivers report a non-zero code as a note.
 
 ## Docker
 

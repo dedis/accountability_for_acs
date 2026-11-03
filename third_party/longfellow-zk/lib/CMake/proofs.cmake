@@ -42,19 +42,24 @@ macro(proofs_add_testing_libraries PROG)
     endif()
 endmacro()
 
-macro(proofs_add_test PROG)
+# add_executable(PROG sources...), as an app bundle on iOS.
+macro(proofs_add_executable PROG)
     if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        add_executable(${PROG} MACOSX_BUNDLE ${PROG}.cc ${ARGN})
+        add_executable(${PROG} MACOSX_BUNDLE ${ARGN})
         set_target_properties(${PROG} PROPERTIES
             MACOSX_BUNDLE_GUI_IDENTIFIER "com.example.longfellow"
             MACOSX_BUNDLE_BUNDLE_NAME "${PROG}"
             XCODE_SCHEME_BUILD_CONFIGURATION "Release"
             XCODE_SCHEME_ARGUMENTS "--benchmark_filter=BM*")
     else()
-        add_executable(${PROG} ${PROG}.cc ${ARGN})
+        add_executable(${PROG} ${ARGN})
     endif()
+endmacro()
 
-    target_link_libraries(${PROG} ec)    
+macro(proofs_add_test PROG)
+    proofs_add_executable(${PROG} ${PROG}.cc ${ARGN})
+
+    target_link_libraries(${PROG} ec)
     target_link_libraries(${PROG} algebra)
     target_link_libraries(${PROG} util)
     proofs_add_testing_libraries(${PROG})
@@ -63,7 +68,7 @@ endmacro()
 # A test program PROG built from SRC with 64-byte SHAKE256 digests (util64;
 # not upstream).
 macro(proofs_add_test_digest64 PROG SRC)
-    add_executable(${PROG} ${SRC})
+    proofs_add_executable(${PROG} ${SRC})
     target_link_libraries(${PROG} ec)
     target_link_libraries(${PROG} algebra)
     target_link_libraries(${PROG} util64)

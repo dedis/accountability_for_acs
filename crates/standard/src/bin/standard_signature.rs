@@ -17,30 +17,12 @@
 //! The summary also has the native signing time (`statsMs.sign`) of the same
 //! scheme, with the signer of `pqc` (fips204 / fips205).
 
-use std::time::Instant;
-
 use anyhow::Result;
 use clap::Parser;
-use pqc::sig::{PqSig, Selected};
+use pqc::sig::Selected;
 use standard::cli::Common;
 use standard::driver::{self, Bench};
-
-/// Native signing with the system's signer (`pqc::sig::Selected`,
-/// the scheme the proof is for): one key, a message of the size of a C4
-/// message (`SHAKE256(t || r2)`, [`pqc::shake::DIGEST_BYTES`] bytes), one
-/// untimed warm-up, then `reps` timed signatures (ms).
-fn sign_ms(reps: usize) -> Result<Vec<f64>> {
-    let (_, sk) = Selected::keygen()?;
-    let msg = [0x5a; pqc::shake::DIGEST_BYTES];
-    Selected::sign(&sk, &msg)?;
-    (0..reps)
-        .map(|_| {
-            let t0 = Instant::now();
-            Selected::sign(&sk, &msg)?;
-            Ok(t0.elapsed().as_secs_f64() * 1e3)
-        })
-        .collect()
-}
+use standard::sign::sign_ms;
 
 #[cfg(all(not(feature = "slh-dsa"), not(feature = "level-5")))]
 const BENCH: Bench = Bench {
@@ -49,7 +31,7 @@ const BENCH: Bench = Bench {
     default_filter: "BM_MLDSA65ZK_Combined",
     test_name: "circuits/tests/pq/ml_dsa/ml_dsa_65_zk_test",
     bin_env: &["LONGFELLOW_SIGNATURE_BENCH_BIN"],
-    sign: Some(sign_ms),
+    sign: Some(sign_ms::<Selected>),
 };
 
 #[cfg(all(not(feature = "slh-dsa"), feature = "level-5"))]
@@ -59,7 +41,7 @@ const BENCH: Bench = Bench {
     default_filter: "BM_MLDSA87ZK_Combined",
     test_name: "circuits/tests/pq/ml_dsa/ml_dsa_87_zk_test",
     bin_env: &["LONGFELLOW_SIGNATURE_BENCH_BIN"],
-    sign: Some(sign_ms),
+    sign: Some(sign_ms::<Selected>),
 };
 
 #[cfg(all(
@@ -74,7 +56,7 @@ const BENCH: Bench = Bench {
     default_filter: "SLHDSA_SHAKE_192s$",
     test_name: "circuits/tests/pq/slh_dsa/slh_dsa_zk_test",
     bin_env: &["LONGFELLOW_SIGNATURE_BENCH_BIN"],
-    sign: Some(sign_ms),
+    sign: Some(sign_ms::<Selected>),
 };
 
 #[cfg(all(feature = "slh-dsa", not(feature = "slh-dsa-f"), feature = "level-5"))]
@@ -85,7 +67,7 @@ const BENCH: Bench = Bench {
     default_filter: "SLHDSA_SHAKE_256s$",
     test_name: "circuits/tests/pq/slh_dsa/slh_dsa_zk_5_test",
     bin_env: &["LONGFELLOW_SIGNATURE_BENCH_BIN"],
-    sign: Some(sign_ms),
+    sign: Some(sign_ms::<Selected>),
 };
 
 #[cfg(all(feature = "slh-dsa-f", not(feature = "level-5")))]
@@ -96,7 +78,7 @@ const BENCH: Bench = Bench {
     default_filter: "SLHDSA_SHAKE_192f$",
     test_name: "circuits/tests/pq/slh_dsa/slh_dsa_zk_test",
     bin_env: &["LONGFELLOW_SIGNATURE_BENCH_BIN"],
-    sign: Some(sign_ms),
+    sign: Some(sign_ms::<Selected>),
 };
 
 #[cfg(all(feature = "slh-dsa-f", feature = "level-5"))]
@@ -107,7 +89,7 @@ const BENCH: Bench = Bench {
     default_filter: "SLHDSA_SHAKE_256f$",
     test_name: "circuits/tests/pq/slh_dsa/slh_dsa_zk_5_test",
     bin_env: &["LONGFELLOW_SIGNATURE_BENCH_BIN"],
-    sign: Some(sign_ms),
+    sign: Some(sign_ms::<Selected>),
 };
 
 #[derive(Parser)]

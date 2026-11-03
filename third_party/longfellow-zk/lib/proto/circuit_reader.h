@@ -103,6 +103,8 @@ class CircuitReader {
         .ninputs = ninputs,
         .npub_in = npub_in,
         .subfield_boundary = subfield_boundary,
+        .l = {},
+        .id = {},
     };
     c->l.reserve(nl);
 

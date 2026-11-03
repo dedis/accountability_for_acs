@@ -10,6 +10,8 @@ pub mod paths;
 #[cfg(feature = "pq")]
 pub mod pq_credential;
 pub mod runner;
+#[cfg(feature = "pq")]
+pub mod sign;
 
 /// The hash in the credential circuits and in Longfellow's proof system:
 /// SHA-256, or SHAKE256 (48-byte output) with the `pq` feature.

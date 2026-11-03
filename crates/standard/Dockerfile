@@ -7,7 +7,7 @@
 #
 # Binaries: standard_prove_verify | standard_prove_verify_no_cft
 #         | standard_prove_verify_revocation | standard_merkle_vs_flat
-#         | standard_communication_size | standard_signature (pq)
+#         | standard_communication_size | standard_signature | standard_sign (pq)
 #         | standard_pq_prove_verify | standard_pq_prove_verify_no_cft (pq)
 #
 # Debian 13: OpenSSL 3.5, which signs with ML-DSA and SLH-DSA for the

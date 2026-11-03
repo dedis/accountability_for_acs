@@ -109,6 +109,13 @@ results go to `-pq` folders (`results/<stack>/local-<N>cpu-pq/`); `--classical`
 writes to the folders without the suffix. Each crate's README covers running
 its benchmarks directly.
 
+`tools/benchmark_pq_table.py` builds and measures the signature proof and the
+credential proof without and with CFT of all six post-quantum signatures,
+plus native signing, and prints one Markdown table (proof size, sign, prove,
+verify, peak memory with circuits loaded, peak memory when compiling them). `--where local` (default) runs natively; `--where docker`
+runs each proof in its own container under the mobile (2 CPUs, 4 GB) and
+server (8 CPUs, 16 GB) profiles.
+
 ## Conventions
 
 - **Binaries** are named `<stack>_<benchmark>`, e.g. `zkfriendly_prove_verify`.

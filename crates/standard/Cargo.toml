@@ -27,6 +27,10 @@ name = "standard_signature"
 required-features = ["pq"]
 
 [[bin]]
+name = "standard_sign"
+required-features = ["pq"]
+
+[[bin]]
 name = "standard_pq_prove_verify"
 required-features = ["pq"]
 
